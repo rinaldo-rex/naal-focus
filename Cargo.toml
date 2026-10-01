@@ -27,6 +27,10 @@ default-features = false
 features = ["applet", "tokio", "a11y"]
 optional = true
 
+[[bin]]
+name = "naal-focus-overlay"
+path = "src/bin/overlay.rs"
+
 [profile.release]
 lto = "thin"
 strip = true

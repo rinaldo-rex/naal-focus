@@ -250,6 +250,7 @@ fn launch(settings: &Settings, quote: &str) -> Result<ManagedChild, String> {
     let mut command = helper_command()?;
     command
         .args([
+            "--stdin",
             "--duration-secs",
             &settings.duration_secs.to_string(),
             "--text-size",
