@@ -24,11 +24,22 @@ fn monitor_clients_share_controls_and_take_over_without_duplicate_timers() {
     fs::create_dir_all(&dir).unwrap();
     let path = dir.join("settings.json");
     fs::write(&path, b"invalid json").unwrap();
+    // Reproduce an old applet briefly retaining its lock during an upgrade.
+    let startup_lock = Singleton::acquire("applet").unwrap();
     let owner = Engine::start(
         Settings::default(),
         Some(path.clone()),
         Some("Invalid settings".into()),
     );
+    wait_until(|| {
+        owner
+            .status()
+            .error
+            .as_deref()
+            .is_some_and(|e| e.contains("already running"))
+    });
+    assert!(!owner.status().safe);
+    drop(startup_lock);
     wait_until(|| owner.status().safe);
     assert!(!owner.status().settings.enabled);
     assert!(!owner.status().running);

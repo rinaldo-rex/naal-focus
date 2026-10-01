@@ -143,10 +143,33 @@ fn share_supervisor(
                         status.error = None;
                     }
                 }
-                let result = supervise(rx, shared, settings, path, corrupt_config);
+                let result = supervise(
+                    &rx,
+                    shared.clone(),
+                    settings.clone(),
+                    path.clone(),
+                    corrupt_config,
+                );
                 // Explicitly close the transport: object-server tasks hold clones.
                 let _ = conn.close();
-                return result;
+                match result {
+                    Ok(()) => return Ok(()),
+                    Err(error) => {
+                        // During an upgrade the old owner can briefly retain the
+                        // process lock. Do not permanently disconnect this popup.
+                        let mut status = shared.lock().unwrap();
+                        status.safe = false;
+                        status.message = "Waiting for shared reminder controls…".into();
+                        status.error = Some(error);
+                        drop(status);
+                        match rx.recv_timeout(Duration::from_millis(250)) {
+                            Ok(Request::Shutdown) | Err(mpsc::RecvTimeoutError::Disconnected) => {
+                                return Ok(());
+                            }
+                            Ok(_) | Err(mpsc::RecvTimeoutError::Timeout) => {}
+                        }
+                    }
+                }
             }
             Err(zbus::Error::NameTaken) | Ok(RequestNameReply::Exists) => {
                 let proxy = Proxy::new(&conn, CONTROL_SERVICE, CONTROL_PATH, CONTROL_INTERFACE)
@@ -247,7 +270,7 @@ fn relay(
 }
 
 fn supervise(
-    rx: mpsc::Receiver<Request>,
+    rx: &mpsc::Receiver<Request>,
     shared: Arc<Mutex<Status>>,
     mut settings: Settings,
     path: Option<PathBuf>,
