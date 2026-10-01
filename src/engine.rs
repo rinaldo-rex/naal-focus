@@ -80,6 +80,7 @@ fn supervise(
     path: Option<PathBuf>,
     mut corrupt_config: bool,
 ) -> Result<(), String> {
+    settings.validate()?;
     let _singleton = Singleton::acquire("applet")?;
     let mut guard = Guard::start(settings.idle_secs);
     let mut schedule = Schedule::new(boot_time(), &settings);

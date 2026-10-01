@@ -62,6 +62,10 @@ impl Schedule {
             self.next = now + interval(settings);
         }
         self.was_safe = safe;
+        // A slow helper must not leave an overdue reminder queued for its exit.
+        if child_active && now >= self.next {
+            self.next = now + interval(settings);
+        }
         if !settings.enabled || !safe || child_active || self.snoozed_remaining(now).is_some() {
             return false;
         }
@@ -111,8 +115,9 @@ mod tests {
         for t in 16..=30 {
             assert!(!s.tick(at(t), &cfg, true, true));
         }
-        assert!(s.tick(at(31), &cfg, true, false));
-        assert!(!s.tick(at(31), &cfg, true, false));
+        assert!(!tick_to(&mut s, &cfg, 31, 44));
+        assert!(s.tick(at(45), &cfg, true, false));
+        assert!(!s.tick(at(45), &cfg, true, false));
     }
 
     #[test]

@@ -8,7 +8,8 @@ use std::{
 
 pub const APP_ID: &str = "io.github.rinaldo_rex.NaalFocus";
 pub const DEFAULT_QUOTES: &str = include_str!("../data/quotes.txt");
-pub const MAX_CONFIG_BYTES: u64 = 128 * 1024;
+// Covers the worst-case UTF-8 size of 100 × 500-character valid quotes.
+pub const MAX_CONFIG_BYTES: u64 = 256 * 1024;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -191,6 +192,12 @@ mod tests {
         assert_eq!(load(&path).unwrap(), Settings::default());
         save(&path, &Settings::default()).unwrap();
         assert_eq!(load(&path).unwrap(), Settings::default());
+        let maximum = Settings {
+            quotes: vec!["🪷".repeat(500); 100],
+            ..Settings::default()
+        };
+        save(&path, &maximum).unwrap();
+        assert_eq!(load(&path).unwrap(), maximum);
         fs::write(&path, b"not json").unwrap();
         assert!(load(&path).is_err());
         assert_eq!(fs::read(&path).unwrap(), b"not json");
