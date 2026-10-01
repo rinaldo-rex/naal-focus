@@ -81,6 +81,12 @@ fn text_width(font: &Font, text: &str, size: f32) -> f32 {
         .sum()
 }
 fn wrap(font: &Font, text: &str, size: f32, max_width: f32) -> Vec<String> {
+    text.split('\n')
+        .flat_map(|line| wrap_line(font, line, size, max_width))
+        .collect()
+}
+
+fn wrap_line(font: &Font, text: &str, size: f32, max_width: f32) -> Vec<String> {
     let mut lines = Vec::new();
     let mut line = String::new();
     for word in text.split_whitespace() {
@@ -104,7 +110,8 @@ fn wrap(font: &Font, text: &str, size: f32, max_width: f32) -> Vec<String> {
             line.push(c);
         }
     }
-    if !line.is_empty() {
+    if !line.is_empty() || lines.is_empty() {
+        // A blank hard line still occupies one line of paragraph spacing.
         lines.push(line);
     }
     lines
@@ -174,6 +181,34 @@ mod tests {
             assert!(((p >> shift) & 255) <= a);
         }
     }
+    #[test]
+    fn hard_line_breaks_and_blank_paragraph_lines_are_preserved() {
+        let font = default_font().expect("a test font must be installed");
+        assert_eq!(
+            wrap(&font, "Notice.\nTake a breath.\n\nReturn.", 36.0, 1100.0),
+            ["Notice.", "Take a breath.", "", "Return."]
+        );
+        assert_eq!(
+            wrap(&font, "\nNotice.\n", 36.0, 1100.0),
+            ["", "Notice.", ""]
+        );
+    }
+
+    #[test]
+    fn multiline_text_still_wraps_each_hard_line_to_the_width() {
+        let font = default_font().expect("a test font must be installed");
+        let long_word = "m".repeat(100);
+        let lines = wrap(&font, &format!("{long_word}\n\nReturn."), 36.0, 220.0);
+        assert!(lines.len() > 3);
+        assert!(
+            lines
+                .iter()
+                .all(|line| text_width(&font, line, 36.0) <= 220.0)
+        );
+        assert_eq!(lines[..lines.len() - 2].concat(), long_word);
+        assert_eq!(&lines[lines.len() - 2..], ["", "Return."]);
+    }
+
     #[test]
     fn unbroken_words_wrap_and_render_stays_in_bounds() {
         let font = default_font().expect("a test font must be installed");
