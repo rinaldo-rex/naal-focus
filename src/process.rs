@@ -135,7 +135,19 @@ mod tests {
         let lock = Singleton::acquire(&name).unwrap();
         assert!(Singleton::acquire(&name).is_err());
         drop(lock);
-        assert!(Singleton::acquire(&name).is_ok());
+        // Parallel tests can briefly inherit this CLOEXEC fd between fork and
+        // exec. Wait for that handoff rather than making a racy one-shot check.
+        let deadline = std::time::Instant::now() + Duration::from_secs(1);
+        loop {
+            if Singleton::acquire(&name).is_ok() {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "singleton was not released"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
         std::fs::remove_file(
             runtime_dir()
                 .unwrap()

@@ -5,6 +5,7 @@ use crate::{
     process::{ManagedChild, Singleton, boot_time, helper_command},
     schedule::Schedule,
 };
+use serde::{Deserialize, Serialize};
 use std::{
     io::Write,
     path::PathBuf,
@@ -12,8 +13,16 @@ use std::{
     sync::{Arc, Mutex, mpsc},
     time::Duration,
 };
+use zbus::{
+    blocking::Proxy,
+    fdo::{RequestNameFlags, RequestNameReply},
+};
 
-#[derive(Clone, Debug)]
+pub const CONTROL_SERVICE: &str = "io.github.rinaldo_rex.NaalFocus.Control";
+const CONTROL_PATH: &str = "/io/github/rinaldo_rex/NaalFocus/Control";
+const CONTROL_INTERFACE: &str = "io.github.rinaldo_rex.NaalFocus.Control1";
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Status {
     pub settings: Settings,
     pub message: String,
@@ -24,6 +33,7 @@ pub struct Status {
     pub snoozed_secs: Option<u64>,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
 pub enum Request {
     Settings(Settings),
     Enabled(bool),
@@ -50,8 +60,16 @@ impl Engine {
             snoozed_secs: None,
         }));
         let shared = status.clone();
+        let control_tx = tx.clone();
         std::thread::spawn(move || {
-            if let Err(e) = supervise(rx, shared.clone(), settings, path, load_error.is_some()) {
+            if let Err(e) = share_supervisor(
+                rx,
+                control_tx,
+                shared.clone(),
+                settings,
+                path,
+                load_error.is_some(),
+            ) {
                 let mut status = shared.lock().unwrap();
                 status.message = "Reminders unavailable.".into();
                 status.error = Some(e);
@@ -73,6 +91,161 @@ impl Drop for Engine {
     }
 }
 
+/// Each panel output is a client. Exactly one owns the D-Bus name and timer;
+/// other outputs relay commands and read the same status without starting guards.
+fn share_supervisor(
+    rx: mpsc::Receiver<Request>,
+    tx: mpsc::Sender<Request>,
+    shared: Arc<Mutex<Status>>,
+    mut settings: Settings,
+    path: Option<PathBuf>,
+    mut corrupt_config: bool,
+) -> Result<(), String> {
+    loop {
+        let conn = zbus::blocking::connection::Builder::session()
+            .map_err(|e| e.to_string())?
+            .method_timeout(Duration::from_secs(1))
+            // Initialize the object server inside zbus's blocking runtime,
+            // not through object_server() on this plain supervisor thread.
+            .serve_at(
+                CONTROL_PATH,
+                Control {
+                    tx: tx.clone(),
+                    status: shared.clone(),
+                },
+            )
+            .map_err(|e| e.to_string())?
+            .build()
+            .map_err(|e| e.to_string())?;
+        match conn.request_name_with_flags(CONTROL_SERVICE, RequestNameFlags::DoNotQueue.into()) {
+            Ok(RequestNameReply::PrimaryOwner | RequestNameReply::AlreadyOwner) => {
+                // A former client reloads the shared settings before taking over.
+                if let Some(path) = &path {
+                    match config::load(path) {
+                        Ok(loaded) => {
+                            settings = loaded;
+                            corrupt_config = false;
+                        }
+                        Err(error) => {
+                            settings = Settings::default();
+                            corrupt_config = true;
+                            shared.lock().unwrap().error = Some(error);
+                        }
+                    }
+                }
+                {
+                    let mut status = shared.lock().unwrap();
+                    status.settings = settings.clone();
+                    status.message = "Starting shared reminder controls…".into();
+                    status.safe = false;
+                    status.running = false;
+                    if !corrupt_config {
+                        status.error = None;
+                    }
+                }
+                let result = supervise(rx, shared, settings, path, corrupt_config);
+                // Explicitly close the transport: object-server tasks hold clones.
+                let _ = conn.close();
+                return result;
+            }
+            Err(zbus::Error::NameTaken) | Ok(RequestNameReply::Exists) => {
+                let proxy = Proxy::new(&conn, CONTROL_SERVICE, CONTROL_PATH, CONTROL_INTERFACE)
+                    .map_err(|e| e.to_string())?;
+                let reconnect = relay(&rx, &shared, &proxy);
+                drop(proxy);
+                let _ = conn.close();
+                if !reconnect? {
+                    return Ok(());
+                }
+                shared.lock().unwrap().message = "Reconnecting to shared reminders…".into();
+            }
+            Ok(other) => {
+                return Err(format!(
+                    "Unexpected control-service ownership reply: {other}"
+                ));
+            }
+            Err(error) => return Err(format!("Cannot connect shared reminder controls: {error}")),
+        }
+    }
+}
+
+struct Control {
+    tx: mpsc::Sender<Request>,
+    status: Arc<Mutex<Status>>,
+}
+#[zbus::interface(name = "io.github.rinaldo_rex.NaalFocus.Control1")]
+impl Control {
+    fn snapshot(&self) -> zbus::fdo::Result<String> {
+        serde_json::to_string(&*self.status.lock().unwrap())
+            .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))
+    }
+    fn send(&self, json: &str) -> zbus::fdo::Result<()> {
+        let request = decode_request(json).map_err(zbus::fdo::Error::InvalidArgs)?;
+        self.tx
+            .send(request)
+            .map_err(|_| zbus::fdo::Error::Failed("Supervisor stopped.".into()))
+    }
+}
+
+fn decode_request(json: &str) -> Result<Request, String> {
+    if json.len() > config::MAX_CONFIG_BYTES as usize {
+        return Err("Control request is too large.".into());
+    }
+    let request: Request = serde_json::from_str(json).map_err(|e| e.to_string())?;
+    match &request {
+        Request::Shutdown => return Err("Only the owning applet can stop its supervisor.".into()),
+        Request::Settings(settings) => settings.validate()?,
+        Request::Snooze(duration)
+            if *duration < Duration::from_secs(1) || *duration > Duration::from_secs(86400) =>
+        {
+            return Err("Snooze must be between one second and one day.".into());
+        }
+        _ => {}
+    }
+    Ok(request)
+}
+
+/// true asks the caller to elect a replacement; false means this UI is closing.
+fn relay(
+    rx: &mpsc::Receiver<Request>,
+    shared: &Arc<Mutex<Status>>,
+    proxy: &Proxy<'_>,
+) -> Result<bool, String> {
+    loop {
+        let snapshot = proxy
+            .call::<_, _, String>("Snapshot", &())
+            .map_err(|e| e.to_string())
+            .and_then(|json| serde_json::from_str::<Status>(&json).map_err(|e| e.to_string()));
+        match snapshot {
+            Ok(status) => *shared.lock().unwrap() = status,
+            Err(error) => {
+                let mut status = shared.lock().unwrap();
+                status.safe = false;
+                status.error = Some(format!("Shared controls reconnecting: {error}"));
+                // Allow the previous owner's transport to finish closing. Do not
+                // replay commands that might already have reached that owner.
+                drop(status);
+                match rx.recv_timeout(Duration::from_millis(250)) {
+                    Ok(Request::Shutdown) | Err(mpsc::RecvTimeoutError::Disconnected) => {
+                        return Ok(false);
+                    }
+                    Ok(_) | Err(mpsc::RecvTimeoutError::Timeout) => return Ok(true),
+                }
+            }
+        }
+        match rx.recv_timeout(Duration::from_millis(250)) {
+            Ok(Request::Shutdown) | Err(mpsc::RecvTimeoutError::Disconnected) => return Ok(false),
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Ok(request) => {
+                let json = serde_json::to_string(&request).map_err(|e| e.to_string())?;
+                if let Err(error) = proxy.call::<_, _, ()>("Send", &(json,)) {
+                    shared.lock().unwrap().error = Some(format!("Shared control failed: {error}"));
+                }
+            }
+        }
+    }
+}
+
 fn supervise(
     rx: mpsc::Receiver<Request>,
     shared: Arc<Mutex<Status>>,
@@ -84,6 +257,9 @@ fn supervise(
     let _singleton = Singleton::acquire("applet")?;
     let mut guard = Guard::start(settings.idle_secs);
     let mut schedule = Schedule::new(boot_time(), &settings);
+    if let Some(seconds) = shared.lock().unwrap().snoozed_secs {
+        schedule.snooze(boot_time(), Duration::from_secs(seconds), &settings);
+    }
     let mut child: Option<(ManagedChild, Duration)> = None;
     let mut manual_at = None;
     let mut last_tick = boot_time();
@@ -274,4 +450,33 @@ fn launch(settings: &Settings, quote: &str) -> Result<ManagedChild, String> {
         .map_err(|e| e.to_string())?;
     drop(stdin);
     Ok(child)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn remote_commands_cannot_stop_the_owner_or_bypass_validation() {
+        for request in [
+            Request::Shutdown,
+            Request::Snooze(Duration::ZERO),
+            Request::Snooze(Duration::from_nanos(1)),
+            Request::Snooze(Duration::from_secs(86401)),
+            Request::Settings(Settings {
+                duration_secs: 0,
+                ..Settings::default()
+            }),
+        ] {
+            assert!(decode_request(&serde_json::to_string(&request).unwrap()).is_err());
+        }
+        for request in [
+            Request::Enabled(false),
+            Request::Resume,
+            Request::Snooze(Duration::from_secs(900)),
+        ] {
+            assert!(decode_request(&serde_json::to_string(&request).unwrap()).is_ok());
+        }
+        assert!(decode_request(&"x".repeat(config::MAX_CONFIG_BYTES as usize + 1)).is_err());
+    }
 }
