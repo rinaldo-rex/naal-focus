@@ -34,4 +34,4 @@ if command -v gtk-update-icon-cache >/dev/null && [[ -f "$prefix/share/icons/hic
 fi
 printf 'Installed under %s. No panel settings or autostart entries changed.\n' "$prefix"
 printf 'Add Naal Focus through COSMIC Settings → Desktop → Dock/Panel → Applets.\n'
-printf 'Recurring reminders start paused.\n'
+printf 'New settings default to paused; existing reminder preferences are preserved.\n'

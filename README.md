@@ -7,7 +7,7 @@ A native **COSMIC dock/panel applet** that briefly dims every monitor with a min
 - Native themed icon, tooltip, and click-open settings popup.
 - Persistent interval, duration, quote collection, text size, and idle threshold.
 - Pause, snooze for 15 minutes, resume, and **Show now** (two-second preparation delay).
-- Quotes rotate in order. The same quote appears on every connected monitor.
+- Bullet-separated quotes support multiple lines and paragraphs, and rotate in order. The same quote appears on every connected monitor.
 - One coordinated fullscreen overlay across all monitors, including panels/docks.
 - **Escape, a mouse-button release, or the timeout dismisses every screen together.**
 - Lock/idle/suspend safeguards, no catch-up bursts, singleton enforcement, supervised helper cleanup, and a separate parent-process watchdog.
@@ -72,9 +72,31 @@ Stored at `$XDG_CONFIG_HOME/naal-focus/settings.json`, or `~/.config/naal-focus/
 | Visible duration | 5 seconds | 1–30 |
 | Text size | 36 logical pixels | 22–72 |
 | Idle threshold | 120 seconds | 30–3600 |
-| Quotes | Four bundled reminders | 1–100 lines, ≤500 characters each |
+| Quotes | Four bundled reminders | 1–100 quotes, ≤500 characters each, including line breaks |
 
 Save applies the edited fields together across all monitor popups. It restarts the interval and cancels any visible/pending reminder. The enable toggle persists immediately. Saved values refresh in other popups, while unsaved edits are preserved and marked. Snooze is temporary, is not saved across a complete restart, and adds a full interval after the snooze ends. **Resume** enables paused reminders or clears an active snooze; it is disabled only when reminders are already running normally. **Show now** is an explicit one-shot action that works while recurring reminders are paused, but never bypasses session safety.
+
+### Multiline quotes
+
+Use an unindented `- ` to start each quote in the popup editor:
+
+```text
+- Notice where your attention has gone.
+  Take one breath.
+
+  Return gently.
+
+- You don’t have to do everything.
+  Just the next useful thing.
+```
+
+This is **two quotes**, not six. Only a top-level `- ` starts a new quote; following lines belong to the current quote until the next marker. A bare `-` is an empty item unless followed by quote text. Indent continuation lines with two spaces for readability (unindented continuations also work). One two-space indent is removed on save, so `  - A literal bullet.` stays inside the quote instead of starting another one.
+
+Interior blank lines create paragraphs. Blank lines at the beginning/end of an item are ignored; empty items are rejected. Line breaks are preserved in the overlay, and long lines still wrap automatically. This is a plain-text delimiter format, **not full Markdown**: emphasis, links, headings, and nested-list styling are not interpreted. Tabs and other control characters remain disallowed.
+
+Existing saved quotes keep their original JSON array format and appear as bullets automatically; no settings migration is needed. Old one-per-line lists without top-level bullet markers can still be pasted. If you use any top-level bullet markers, all text must belong to an item—text before the first marker is an error. The one-shot helper’s `--stdin` accepts one raw quote, including line breaks and literal bullets, not a bulk-editor list.
+
+The 500-character limit applies to the entire quote, including its line breaks, not separately to each line. For long quotes, consider increasing the visible duration so you have time to read them.
 
 ## Safety and scheduling
 
@@ -112,7 +134,8 @@ The read-only supervisor integration test exercises three monitor clients, share
 
 On 2026-10-01, in the target COSMIC session:
 
-- Formatting, warnings-denied Clippy, and 16 unit tests passed; native debug/release binaries built.
+- Formatting, warnings-denied Clippy, and 23 unit tests passed; native debug/release binaries built.
+- Multiline bullet parsing/formatting, native editor round trips, raw helper input, paragraph-aware wrapping, and settings persistence passed unit tests. The isolated three-client regression also preserved multiline quotes and literal bullets across saved/shared settings. The updated release was installed and all three applets reloaded successfully; the settings file remained byte-for-byte unchanged, including its existing enabled/paused preference.
 - The read-only supervisor integration test passed with three shared-control clients: settings persistence/repair, snooze/resume, secondary-client closure, and owner takeover, with no overlay or recurring timer enabled.
 - The initial per-output singleton regression was fixed: additional monitor applets now connect to the shared supervisor instead of exiting their control worker. The updated installed applets on HDMI-A-1, eDP-1, and DP-1 all reported ready shared controls with no error and one process-lock owner.
 - Reloading this installed COSMIC version required restarting the panel/dock (with user approval); cleanly stopping individual applets did not automatically relaunch them.
@@ -122,16 +145,16 @@ On 2026-10-01, in the target COSMIC session:
 - An automated Escape test dismissed all three surfaces together. Both tests exited successfully and left no helper running.
 - The standalone native control window opened successfully.
 
-**Not yet verified live:** click-release dismissal, blocked typing/focus restoration, actual dock/panel popup placement, recurring reminders, lock/suspend transitions, and hotplug. These are acceptance checks, not claims established by unit tests.
+**Not yet verified live:** multiline overlay appearance, click-release dismissal, blocked typing/focus restoration, actual dock/panel popup placement, recurring reminders, lock/suspend transitions, and hotplug. These are acceptance checks, not claims established by unit tests.
 
-Rendering supports integer buffer scaling (fractional compositor scales use the rounded integer scale), bounded word/character wrapping, and text-size adjustment. It still uses fontdue with a single installed sans-serif font, not a full multilingual shaping/fallback engine; complex scripts and unsupported glyphs may not render correctly. Exceptionally dense long quotes on very small screens can still need a smaller text size. Per-output buffers are capped at 32 million pixels and combined buffers at 64 million; unsupported layouts fail safely. Seat-topology changes require restarting the applet. No animations, translated UI, DND/fullscreen suppression, or remote configuration watcher yet; manual file edits take effect after restart.
+Rendering supports integer buffer scaling (fractional compositor scales use the rounded integer scale), bounded word/character wrapping within preserved hard lines/paragraphs, and text-size adjustment. It still uses fontdue with a single installed sans-serif font, not a full multilingual shaping/fallback engine; complex scripts and unsupported glyphs may not render correctly. Exceptionally dense long quotes on very small screens can still need a smaller text size. Per-output buffers are capped at 32 million pixels and combined buffers at 64 million; unsupported layouts fail safely. Seat-topology changes require restarting the applet. No animations, translated UI, DND/fullscreen suppression, or remote configuration watcher yet; manual file edits take effect after restart.
 
 ## Source map
 
 | Path | Responsibility |
 |---|---|
 | `src/applet.rs` | Native COSMIC icon, controls, popup, and standalone view |
-| `src/config.rs` | Versioned settings, validation, and atomic persistence |
+| `src/config.rs` | Versioned settings, bullet quote parsing/formatting, validation, atomic persistence |
 | `src/schedule.rs` | Pure no-burst scheduling, snooze, and quote rotation |
 | `src/engine.rs` | Shared D-Bus controls, elected timer/helper supervisor, watchdog |
 | `src/guard.rs` | logind/COSMIC lock and Wayland input-idle checks |
