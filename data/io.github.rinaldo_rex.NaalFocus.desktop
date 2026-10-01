@@ -1,0 +1,14 @@
+[Desktop Entry]
+Name=Naal Focus
+Comment=Pause, breathe, and return to your work
+Type=Application
+Exec=@EXEC@
+Icon=naal-focus-symbolic
+Terminal=false
+Categories=Utility;
+Keywords=COSMIC;Applet;Focus;Mindfulness;Reminder;
+NoDisplay=true
+X-CosmicApplet=true
+X-CosmicShrinkable=true
+X-HostWaylandDisplay=true
+X-CosmicHoverPopup=Auto
