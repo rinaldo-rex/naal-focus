@@ -1,0 +1,32 @@
+[package]
+name = "naal-focus"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.93"
+description = "A mindful attention reminder applet for COSMIC"
+publish = false
+
+[features]
+default = []
+applet = ["dep:libcosmic"]
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+libc = "0.2"
+zbus = { version = "=5.19.0", features = ["blocking-api"] }
+smithay-client-toolkit = "=0.21.1"
+wayland-client = "=0.31.15"
+wayland-protocols = { version = "=0.32.13", features = ["client", "staging"] }
+fontdue = "=0.9.4"
+
+[dependencies.libcosmic]
+git = "https://github.com/pop-os/libcosmic"
+rev = "6af8b7051b6e6c3a9d0c42c3b2fc5a14a80afe36"
+default-features = false
+features = ["applet", "tokio", "a11y"]
+optional = true
+
+[profile.release]
+lto = "thin"
+strip = true
