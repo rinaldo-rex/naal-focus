@@ -62,29 +62,91 @@ impl Settings {
     }
 }
 
+/// Bulk-editor syntax, not Markdown: top-level `- ` starts an item, while
+/// continuation lines (including blank lines) stay in that item. Remove one
+/// two-space editor indent; an indented `- ` therefore stays literal text.
+/// Unbulleted one-per-line lists remain supported for legacy pastes/defaults.
 pub fn parse_quotes(text: &str) -> Result<Vec<String>, String> {
-    let quotes: Vec<_> = text
-        .lines()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_owned)
-        .collect();
+    if text.len() > MAX_CONFIG_BYTES as usize {
+        return Err("Quote collection is too large.".into());
+    }
+    let quotes = if text.lines().any(|line| quote_start(line).is_some()) {
+        let mut quotes = Vec::new();
+        let mut current: Option<String> = None;
+        for (index, line) in text.lines().enumerate() {
+            if let Some(first_line) = quote_start(line) {
+                if let Some(previous) = current.replace(first_line.to_owned()) {
+                    quotes.push(trim_blank_edges(&previous));
+                }
+            } else if let Some(quote) = &mut current {
+                quote.push('\n');
+                quote.push_str(line.strip_prefix("  ").unwrap_or(line));
+            } else if !line.trim().is_empty() {
+                return Err(format!(
+                    "Line {}: text before the first quote; start it with '- '.",
+                    index + 1
+                ));
+            }
+        }
+        if let Some(quote) = current {
+            quotes.push(trim_blank_edges(&quote));
+        }
+        quotes
+    } else {
+        text.lines()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
+            .collect()
+    };
     validate_quotes(&quotes)?;
     Ok(quotes)
 }
 
-fn validate_quotes(quotes: &[String]) -> Result<(), String> {
-    if quotes.is_empty() || quotes.len() > 100 {
-        return Err("Provide 1–100 quotes, one per line.".into());
+fn quote_start(line: &str) -> Option<&str> {
+    line.strip_prefix("- ")
+        .or_else(|| (line == "-").then_some(""))
+}
+
+fn trim_blank_edges(quote: &str) -> String {
+    let lines: Vec<_> = quote.lines().collect();
+    let first = lines.iter().position(|line| !line.trim().is_empty());
+    let last = lines.iter().rposition(|line| !line.trim().is_empty());
+    match (first, last) {
+        (Some(first), Some(last)) => lines[first..=last].join("\n"),
+        _ => String::new(),
     }
-    if quotes
+}
+
+/// Escape every continuation with two spaces so even literal bullet lines
+/// round-trip as part of one quote rather than becoming additional items.
+pub fn format_quotes(quotes: &[String]) -> String {
+    quotes
         .iter()
-        .any(|q| q.trim().is_empty() || q.chars().count() > 500 || q.chars().any(char::is_control))
-    {
-        return Err(
-            "Each quote must be non-empty, at most 500 characters, with no control characters."
-                .into(),
-        );
+        .map(|quote| format!("- {}", quote.replace('\n', "\n  ")))
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
+pub(crate) fn validate_quotes(quotes: &[String]) -> Result<(), String> {
+    if quotes.is_empty() || quotes.len() > 100 {
+        return Err("Provide 1–100 quotes.".into());
+    }
+    for (index, quote) in quotes.iter().enumerate() {
+        let number = index + 1;
+        if quote.trim().is_empty() {
+            return Err(format!("Quote {number} is empty."));
+        }
+        if quote.chars().count() > 500 {
+            return Err(format!(
+                "Quote {number} exceeds 500 characters (including line breaks)."
+            ));
+        }
+        if quote.chars().any(|c| c.is_control() && c != '\n') {
+            return Err(format!(
+                "Quote {number}: line breaks are allowed, but tabs and other control characters are not."
+            ));
+        }
     }
     Ok(())
 }
@@ -185,6 +247,60 @@ mod tests {
     }
 
     #[test]
+    fn bullets_keep_multiline_paragraphs_and_nested_bullets_together() {
+        assert_eq!(parse_quotes("\n- First line.\n  Second line.\n\n  New paragraph.\n  - Literal bullet.\n\n- Another quote.\nUnindented continuation.\n\n").unwrap(), [
+            "First line.\nSecond line.\n\nNew paragraph.\n- Literal bullet.",
+            "Another quote.\nUnindented continuation.",
+        ]);
+        assert_eq!(
+            parse_quotes("- First.\r\n  Second.\r\n\r\n- Next.").unwrap(),
+            ["First.\nSecond.", "Next."]
+        );
+        assert!(parse_quotes("A forgotten marker.\n- Next quote.").is_err());
+        for empty in ["-", "- \n- Valid.", "- Valid.\n-", "- \n  \n- Valid."] {
+            assert!(parse_quotes(empty).is_err(), "{empty:?}");
+        }
+    }
+
+    #[test]
+    fn bullet_editor_round_trips_saved_quotes_and_literal_markers() {
+        let mut quotes = Settings::default().quotes;
+        quotes.extend([
+            "Take a breath.\n\nThen return. 🪷".into(),
+            "- Literal first bullet.\n- Literal continuation.\n  - Nested bullet.".into(),
+            "  Leading spaces.\n    Indented continuation.  ".into(),
+        ]);
+        assert_eq!(parse_quotes(&format_quotes(&quotes)).unwrap(), quotes);
+    }
+
+    #[test]
+    fn multiline_quotes_keep_character_and_control_limits() {
+        let mut settings = Settings {
+            quotes: vec![format!("{}\n🪷", "é".repeat(498))],
+            ..Settings::default()
+        };
+        settings.validate().unwrap();
+        assert_eq!(
+            parse_quotes(&format_quotes(&settings.quotes)).unwrap(),
+            settings.quotes
+        );
+        settings.quotes[0].push('a');
+        assert!(settings.validate().is_err());
+        for bad in [
+            "first\tsecond",
+            "first\rsecond",
+            "first\u{1b}second",
+            "first\0second",
+            "\n  \n",
+        ] {
+            settings.quotes = vec![bad.into()];
+            assert!(settings.validate().is_err(), "{bad:?}");
+        }
+        assert!(parse_quotes(&"- Quote.\n".repeat(101)).is_err());
+        assert!(parse_quotes(&"x".repeat(MAX_CONFIG_BYTES as usize + 1)).is_err());
+    }
+
+    #[test]
     fn round_trip_and_corrupt_file_preservation() {
         let dir = std::env::temp_dir().join(format!("naal-config-test-{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
@@ -198,6 +314,12 @@ mod tests {
         };
         save(&path, &maximum).unwrap();
         assert_eq!(load(&path).unwrap(), maximum);
+        let multiline = Settings {
+            quotes: vec!["First line.\n\nAnother paragraph.\n- A literal bullet.".into()],
+            ..Settings::default()
+        };
+        save(&path, &multiline).unwrap();
+        assert_eq!(load(&path).unwrap(), multiline);
         fs::write(&path, b"not json").unwrap();
         assert!(load(&path).is_err());
         assert_eq!(fs::read(&path).unwrap(), b"not json");

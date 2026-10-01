@@ -1,6 +1,6 @@
 //! One coordinated, short-lived native overlay on every selected output.
 use crate::{
-    config::{Settings, parse_quotes},
+    config::{Settings, validate_quotes},
     guard::Guard,
     process::{Singleton, boot_time, desktop_connection},
     render,
@@ -45,7 +45,7 @@ Usage: naal-focus-overlay [OPTIONS]
   --delay-secs N       Delay before showing, 0–60 (default 0)
   --text-size N        Logical text size, 22–72 (default 36)
   --idle-secs N        Skip idle sessions, 30–3600 (default 120)
-  --stdin              Read one bounded UTF-8 quote from stdin
+  --stdin              Read one raw UTF-8 quote (including line breaks) from stdin
   -h, --help           Print help
 
 WARNING: captures keyboard focus on all covered monitors. Escape or a mouse
@@ -111,18 +111,24 @@ fn number(option: &str, text: Option<String>) -> Result<u64, String> {
         .map_err(|_| format!("{option} requires an integer."))
 }
 
+fn read_stdin_quote(input: impl Read) -> Result<String, String> {
+    let mut quote = String::new();
+    input
+        .take(4097)
+        .read_to_string(&mut quote)
+        .map_err(|e| e.to_string())?;
+    if quote.len() > 4096 {
+        return Err("Quote input is too large.".into());
+    }
+    // This is already one selected quote, not the bulk-editor format. Parsing
+    // bullet delimiters here would split or corrupt literal lists in its text.
+    validate_quotes(std::slice::from_ref(&quote))?;
+    Ok(quote)
+}
+
 pub fn run(mut options: Options) -> Result<(), Box<dyn Error>> {
     if options.stdin && !options.check {
-        let mut quote = String::new();
-        std::io::stdin().take(4097).read_to_string(&mut quote)?;
-        if quote.len() > 4096 {
-            return Err("Quote input is too large.".into());
-        }
-        let quotes = parse_quotes(&quote)?;
-        if quotes.len() != 1 {
-            return Err("Helper requires exactly one quote.".into());
-        }
-        options.settings.quotes = quotes;
+        options.settings.quotes = vec![read_stdin_quote(std::io::stdin())?];
     }
     let conn = desktop_connection()?;
     let (globals, mut queue) = registry_queue_init(&conn)?;
@@ -630,6 +636,21 @@ mod tests {
     fn parse(args: &[&str]) -> Result<Option<Options>, String> {
         Options::parse(args.iter().map(|s| (*s).into()))
     }
+    #[test]
+    fn helper_reads_multiline_text_as_one_raw_quote_without_surfaces() {
+        let quote = "Take a breath.\n\n- Notice.\n- Return.";
+        assert_eq!(read_stdin_quote(quote.as_bytes()).unwrap(), quote);
+        for bad in [
+            String::new(),
+            "a".repeat(501),
+            "a".repeat(4097),
+            "bad\u{1b}text".into(),
+        ] {
+            assert!(read_stdin_quote(bad.as_bytes()).is_err());
+        }
+        assert!(read_stdin_quote(&[0xff][..]).is_err());
+    }
+
     #[test]
     fn helper_has_no_recurring_mode_and_bounds_focus_capture() {
         assert!(parse(&[]).unwrap().unwrap().output.is_none());
