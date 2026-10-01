@@ -28,6 +28,11 @@ features = ["applet", "tokio", "a11y"]
 optional = true
 
 [[bin]]
+name = "naal-focus"
+path = "src/bin/applet.rs"
+required-features = ["applet"]
+
+[[bin]]
 name = "naal-focus-overlay"
 path = "src/bin/overlay.rs"
 
