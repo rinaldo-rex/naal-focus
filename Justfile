@@ -11,7 +11,11 @@ check:
     cargo fmt --check
     cargo clippy --locked --features applet --all-targets -- -D warnings
     cargo test --locked --features applet
-    bash -n scripts/install.sh scripts/uninstall.sh
+    bash -n scripts/install.sh scripts/uninstall.sh scripts/test-supervisor.sh
+
+# Isolated session/runtime: three control clients, no overlays or recurring timer.
+check-native:
+    ./scripts/test-supervisor.sh
 
 # Read-only: creates no overlay and captures no focus.
 probe:

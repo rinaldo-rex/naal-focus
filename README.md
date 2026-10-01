@@ -53,7 +53,7 @@ The installer places two binaries, a desktop entry, and an icon under the chosen
 
 Then open **COSMIC Settings → Desktop → Dock or Panel → Applets**, find **Naal Focus**, and add it. Click the icon to configure it. No panel settings are edited by the installer. If the applet list is already open, close/reopen Settings to refresh it.
 
-Only **one applet instance** owns the reminder timer. A duplicate instance reports that another applet is running instead of starting another timer. Close a standalone `--settings` instance before adding the applet to a panel. Removing the applet stops its supervised helper; adding it again honors the persisted enabled/paused setting and waits a full interval.
+COSMIC launches an applet instance for each dock/panel output. **Every popup controls the same settings and timer** through a session D-Bus service; only the elected owner runs the scheduler and safety guards. A standalone `--settings` window also joins those shared controls. Closing a secondary instance does not stop reminders. If the owner closes, a remaining instance takes over, preserves the snooze, and restarts a full interval. Removing every instance stops reminders and the supervised helper.
 
 ```sh
 ./scripts/uninstall.sh           # remove from the dock/panel first
@@ -74,11 +74,11 @@ Stored at `$XDG_CONFIG_HOME/naal-focus/settings.json`, or `~/.config/naal-focus/
 | Idle threshold | 120 seconds | 30–3600 |
 | Quotes | Four bundled reminders | 1–100 lines, ≤500 characters each |
 
-Save applies the edited fields together. It restarts the interval and cancels any visible/pending reminder. The enable toggle persists immediately. Snooze is temporary, is not saved across restarts, and adds a full interval after the snooze ends. **Show now** is an explicit one-shot action that works while recurring reminders are paused, but never bypasses session safety.
+Save applies the edited fields together across all monitor popups. It restarts the interval and cancels any visible/pending reminder. The enable toggle persists immediately. Saved values refresh in other popups, while unsaved edits are preserved and marked. Snooze is temporary, is not saved across a complete restart, and adds a full interval after the snooze ends. **Resume** enables paused reminders or clears an active snooze; it is disabled only when reminders are already running normally. **Show now** is an explicit one-shot action that works while recurring reminders are paused, but never bypasses session safety.
 
 ## Safety and scheduling
 
-- The applet owns the only recurring timer; the helper has **no loop mode**.
+- An elected applet owns the only recurring timer; other monitor instances relay validated commands and share status. D-Bus name ownership and the process lock prevent duplicate supervisors. The helper has **no loop mode**.
 - The helper explicitly connects to the desktop socket identified by `WAYLAND_DISPLAY`, ignoring the panel's inherited `WAYLAND_SOCKET` and privileged socket. `NAAL_FOCUS_WAYLAND_DISPLAY` can override the desktop socket if needed; no display name is hardcoded.
 - logind's graphical user session is checked for activity, lock, idle, and preparation for sleep. COSMIC's `cosmic-greeter-<session>.lock` runtime marker is also checked, since the current locker does not reliably update `LockedHint`.
 - Wayland `ext_idle_notifier_v1` **version 2** tracks input inactivity independently of video-player idle inhibitors. Missing/stale guard data blocks reminders, including **Show now**.
@@ -102,18 +102,20 @@ Use a disposable editor document, not an important terminal command:
 
 Check timeout, Escape, click-release, readable text on each scale, blocked typing during the overlay, and focus restoration afterward. Also check hotplug, fullscreen applications, idle, lock/unlock, and suspend/resume. Do not trigger lock/suspend tests while doing unsaved work.
 
-The read-only supervisor integration test exercises settings, snooze/resume, and duplicate exclusion, without requesting overlays or enabling recurrence. Close other Naal Focus instances first:
+The read-only supervisor integration test exercises three monitor clients, shared settings, snooze/resume, closing a secondary client, and automatic owner takeover, without requesting overlays or enabling recurrence. Its wrapper creates a private D-Bus session/runtime so it does not interfere with installed applets:
 
 ```sh
-cargo test --locked --features applet --test supervisor -- --ignored --test-threads=1
+./scripts/test-supervisor.sh
 ```
 
 ## Verification and current limits
 
 On 2026-10-01, in the target COSMIC session:
 
-- Formatting, warnings-denied Clippy, and 14 unit tests passed; native debug/release binaries built.
-- The read-only supervisor integration test passed: settings persistence/repair, duplicate exclusion, and snooze/resume, with no overlay or recurring timer enabled.
+- Formatting, warnings-denied Clippy, and 16 unit tests passed; native debug/release binaries built.
+- The read-only supervisor integration test passed with three shared-control clients: settings persistence/repair, snooze/resume, secondary-client closure, and owner takeover, with no overlay or recurring timer enabled.
+- The initial per-output singleton regression was fixed: additional monitor applets now connect to the shared supervisor instead of exiting their control worker. The updated installed applets on HDMI-A-1, eDP-1, and DP-1 all reported ready shared controls with no error and one process-lock owner.
+- Reloading this installed COSMIC version required restarting the panel/dock (with user approval); cleanly stopping individual applets did not automatically relaunch them.
 - User-local installation and an install/uninstall round trip under a prefix containing spaces passed; the installed desktop entry passed `desktop-file-validate`.
 - The read-only probe resolved all three outputs and reported ready lock/idle guards.
 - A five-second live reminder mapped **HDMI-A-1, DP-1, and eDP-1**; the user confirmed all screens dimmed with readable text. eDP-1 rendered at buffer scale 2.
@@ -131,10 +133,10 @@ Rendering supports integer buffer scaling (fractional compositor scales use the 
 | `src/applet.rs` | Native COSMIC icon, controls, popup, and standalone view |
 | `src/config.rs` | Versioned settings, validation, and atomic persistence |
 | `src/schedule.rs` | Pure no-burst scheduling, snooze, and quote rotation |
-| `src/engine.rs` | Single timer/helper supervisor and watchdog |
+| `src/engine.rs` | Shared D-Bus controls, elected timer/helper supervisor, watchdog |
 | `src/guard.rs` | logind/COSMIC lock and Wayland input-idle checks |
 | `src/process.rs` | Desktop socket routing, singleton locks, child lifecycle |
 | `src/overlay.rs`, `src/render.rs` | Coordinated layer-shell surfaces and text rendering |
 | `data/`, `scripts/` | Quotes, icon, applet metadata, user-local installation |
-| `tests/supervisor.rs` | Opt-in read-only native supervisor integration test |
+| `tests/supervisor.rs`, `scripts/test-supervisor.sh` | Isolated read-only multi-client/takeover regression test |
 | `poc/` | Original local POC reference, deliberately left untouched/ignored |

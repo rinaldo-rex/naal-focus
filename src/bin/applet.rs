@@ -2,7 +2,7 @@ fn main() -> cosmic::iced::Result {
     let args: Vec<_> = std::env::args().skip(1).collect();
     if args.iter().any(|arg| arg == "--help" || arg == "-h") {
         println!(
-            "Naal Focus — COSMIC mindfulness reminder applet\n\nUsage: naal-focus [--settings]\n\nWithout arguments, run inside the COSMIC panel/dock.\n--settings opens a standalone control window (one instance only).\nRecurring reminders are paused until explicitly enabled.\nUse naal-focus-overlay --check for a read-only desktop probe."
+            "Naal Focus — COSMIC mindfulness reminder applet\n\nUsage: naal-focus [--settings]\n\nWithout arguments, run inside the COSMIC panel/dock.\n--settings opens a standalone window sharing the dock/panel controls.\nRecurring reminders are paused until explicitly enabled.\nUse naal-focus-overlay --check for a read-only desktop probe."
         );
         return Ok(());
     }
