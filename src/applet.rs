@@ -27,6 +27,7 @@ pub struct App {
     idle_secs: String,
     quotes: widget::text_editor::Content<cosmic::Renderer>,
     form_error: Option<String>,
+    dirty: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -66,7 +67,7 @@ impl App {
                     .push(widget::button::standard("Snooze 15 min").on_press(Message::Snooze))
                     .push(
                         widget::button::text("Resume")
-                            .on_press_maybe(self.status.snoozed_secs.map(|_| Message::Resume)),
+                            .on_press_maybe(resume_request(&self.status).map(|_| Message::Resume)),
                     ),
             )
             .push(
@@ -116,12 +117,28 @@ impl App {
                 )
                 .size(12),
             );
+        if self.dirty {
+            content =
+                content.push(widget::text("Unsaved edits — Save settings to apply.").size(12));
+        }
         if let Some(error) = self.form_error.as_ref().or(self.status.error.as_ref()) {
             content = content.push(widget::text(format!("⚠ {error}")).size(13));
         }
         widget::scrollable(content.padding(16))
             .width(iced::Length::Fill)
             .into()
+    }
+
+    fn sync_status(&mut self, status: Status) {
+        if !self.dirty && status.settings != self.status.settings {
+            self.interval = status.settings.interval_secs.to_string();
+            self.duration = status.settings.duration_secs.to_string();
+            self.text_size = status.settings.text_size.to_string();
+            self.idle_secs = status.settings.idle_secs.to_string();
+            self.quotes =
+                widget::text_editor::Content::with_text(&status.settings.quotes.join("\n"));
+        }
+        self.status = status;
     }
 
     fn candidate(&self) -> Result<Settings, String> {
@@ -184,6 +201,7 @@ impl cosmic::Application for App {
             idle_secs: settings.idle_secs.to_string(),
             quotes: widget::text_editor::Content::with_text(&settings.quotes.join("\n")),
             form_error: None,
+            dirty: false,
         };
         let task = if app.standalone {
             app.set_header_title("Naal Focus".into());
@@ -241,7 +259,7 @@ impl cosmic::Application for App {
     }
     fn update(&mut self, message: Message) -> Task<cosmic::Action<Message>> {
         match message {
-            Message::Tick => self.status = self.engine.status(),
+            Message::Tick => self.sync_status(self.engine.status()),
             Message::Enabled(enabled) => {
                 self.engine.request(Request::Enabled(enabled));
                 self.form_error = None;
@@ -249,22 +267,42 @@ impl cosmic::Application for App {
             Message::Snooze => self
                 .engine
                 .request(Request::Snooze(Duration::from_secs(15 * 60))),
-            Message::Resume => self.engine.request(Request::Resume),
+            Message::Resume => {
+                if let Some(request) = resume_request(&self.status) {
+                    self.engine.request(request);
+                }
+            }
             Message::ShowNow => {
                 self.engine.request(Request::ShowNow);
                 if let Some(popup) = self.popup.take() {
                     return destroy_popup(popup);
                 }
             }
-            Message::Interval(text) => self.interval = text,
-            Message::Duration(text) => self.duration = text,
-            Message::TextSize(text) => self.text_size = text,
-            Message::IdleSecs(text) => self.idle_secs = text,
-            Message::Quotes(action) => self.quotes.perform(action),
+            Message::Interval(text) => {
+                self.interval = text;
+                self.dirty = true;
+            }
+            Message::Duration(text) => {
+                self.duration = text;
+                self.dirty = true;
+            }
+            Message::TextSize(text) => {
+                self.text_size = text;
+                self.dirty = true;
+            }
+            Message::IdleSecs(text) => {
+                self.idle_secs = text;
+                self.dirty = true;
+            }
+            Message::Quotes(action) => {
+                self.dirty |= action.is_edit();
+                self.quotes.perform(action);
+            }
             Message::Save => match self.candidate() {
                 Ok(settings) => {
                     self.engine.request(Request::Settings(settings));
                     self.form_error = None;
+                    self.dirty = false;
                 }
                 Err(error) => self.form_error = Some(error),
             },
@@ -305,5 +343,41 @@ impl cosmic::Application for App {
         } else {
             Some(cosmic::applet::style())
         }
+    }
+}
+
+fn resume_request(status: &Status) -> Option<Request> {
+    if !status.settings.enabled {
+        Some(Request::Enabled(true))
+    } else if status.snoozed_secs.is_some() {
+        Some(Request::Resume)
+    } else {
+        None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn resume_unpauses_or_clears_snooze_and_only_disables_when_running() {
+        let mut status = Status {
+            settings: Settings::default(),
+            message: String::new(),
+            error: None,
+            running: false,
+            safe: true,
+            next_secs: 300,
+            snoozed_secs: None,
+        };
+        assert!(matches!(
+            resume_request(&status),
+            Some(Request::Enabled(true))
+        ));
+        status.settings.enabled = true;
+        status.snoozed_secs = Some(900);
+        assert!(matches!(resume_request(&status), Some(Request::Resume)));
+        status.snoozed_secs = None;
+        assert!(resume_request(&status).is_none());
     }
 }
