@@ -101,7 +101,8 @@ impl App {
                     .on_input(Message::IdleSecs)
                     .width(100),
             ))
-            .push(widget::text::heading("Quotes — one per line"))
+            .push(widget::text::heading("Quotes — bullet-separated"))
+            .push(widget::text("Start each quote with “- ” at the left edge.\nFollowing lines and paragraphs stay in that quote.").size(12))
             .push(
                 widget::text_editor::text_editor(&self.quotes)
                     .height(150)
@@ -135,8 +136,9 @@ impl App {
             self.duration = status.settings.duration_secs.to_string();
             self.text_size = status.settings.text_size.to_string();
             self.idle_secs = status.settings.idle_secs.to_string();
-            self.quotes =
-                widget::text_editor::Content::with_text(&status.settings.quotes.join("\n"));
+            self.quotes = widget::text_editor::Content::with_text(&config::format_quotes(
+                &status.settings.quotes,
+            ));
         }
         self.status = status;
     }
@@ -199,7 +201,9 @@ impl cosmic::Application for App {
             duration: settings.duration_secs.to_string(),
             text_size: settings.text_size.to_string(),
             idle_secs: settings.idle_secs.to_string(),
-            quotes: widget::text_editor::Content::with_text(&settings.quotes.join("\n")),
+            quotes: widget::text_editor::Content::with_text(&config::format_quotes(
+                &settings.quotes,
+            )),
             form_error: None,
             dirty: false,
         };
@@ -359,6 +363,18 @@ fn resume_request(status: &Status) -> Option<Request> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn native_editor_preserves_multiline_quotes_and_literal_bullets() {
+        let quotes = vec![
+            "First line.\n\n- Literal bullet.".into(),
+            "Another quote.\nAnother line.".into(),
+        ];
+        let content = widget::text_editor::Content::<cosmic::Renderer>::with_text(
+            &config::format_quotes(&quotes),
+        );
+        assert_eq!(config::parse_quotes(&content.text()).unwrap(), quotes);
+    }
+
     #[test]
     fn resume_unpauses_or_clears_snooze_and_only_disables_when_running() {
         let mut status = Status {

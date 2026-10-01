@@ -64,7 +64,9 @@ fn monitor_clients_share_controls_and_take_over_without_duplicate_timers() {
 
     let settings = Settings {
         interval_secs: 60,
-        quotes: vec!["A shared reminder.".into()],
+        quotes: vec![
+            "A shared reminder.\n\n- A literal bullet.\nKeep these lines together.".into(),
+        ],
         ..Settings::default()
     };
     second.request(Request::Settings(settings.clone()));
