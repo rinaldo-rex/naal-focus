@@ -2,7 +2,7 @@
 
 A COSMIC dock/panel applet that periodically dims all monitors with a mindfulness reminder.
 
-**Reminders capture keyboard focus.** Press Esc or click to dismiss.
+**Reminders capture keyboard focus.** Just breathe, or type an optional reflection. Esc/background click discards an active draft; otherwise it dismisses.
 
 ## Install
 
@@ -22,6 +22,14 @@ Add **Naal Focus** through **COSMIC Settings → Desktop → Dock/Panel → Appl
 - Use **Snooze 15 min**, **Resume**, or **Show now** as needed.
 
 All monitor popups share the same settings and timer. Updates preserve existing preferences.
+
+## Activity reflections
+
+The quiet textbox is ready for typing without a click. Typing holds the normal countdown; **Enter** saves locally and resumes the remaining time. Saved text replaces the textbox—click it to correct the same entry. Clicking alone does not pause the countdown; changing text does.
+
+Set **Typing time limit** in the widget (default two minutes, adjustable from 30 seconds to ten minutes). A subtle underline shows time remaining while writing. Doing nothing preserves the normal reminder timeout.
+
+Logs stay private at `~/.naal-focus/activity.jsonl`. Only submitted text and its timestamp are recorded; no raw keystrokes or writing duration. The dashboard is a separate, future feature. See the [activity reference](docs/REFERENCE.md#activity-reflections-and-history) for details.
 
 ## Quotes
 
