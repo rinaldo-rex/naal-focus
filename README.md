@@ -36,4 +36,4 @@ Start each quote with an unindented `- `. Following lines belong to that quote:
 
 Line breaks and paragraphs are preserved. Add 1–100 quotes, up to 500 characters each, including line breaks.
 
-See the [reference](docs/REFERENCE.md) for quote rules, settings limits, uninstalling, and development.
+See the [reference](docs/REFERENCE.md) for quote rules, settings limits, uninstalling, and development. Maintainers can start with the [architecture and safety rationale](docs/ARCHITECTURE.md).

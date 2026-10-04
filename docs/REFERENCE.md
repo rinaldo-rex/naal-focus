@@ -87,6 +87,8 @@ Check timeout, Escape, click-release, multiline layout, monitor scaling, typing 
 
 ## Runtime safety
 
+See [architecture and safety rationale](ARCHITECTURE.md) for supervisor election, compositor routing, and why these safeguards are required.
+
 - One elected applet supervises the scheduler and helper; D-Bus ownership and a process lock prevent duplicate timers.
 - Lock, idle, sleep, missing guard data, and stale guard data block reminders. Checks use logind, COSMIC's runtime lock marker, and Wayland `ext_idle_notifier_v1` version 2.
 - Returning from an unsafe session or a scheduling gap starts a full interval. `CLOCK_BOOTTIME` includes suspended time; missed reminders are discarded.
