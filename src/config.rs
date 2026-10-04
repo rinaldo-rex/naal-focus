@@ -41,6 +41,14 @@ impl Default for Settings {
 }
 
 impl Settings {
+    /// Absolute bound, independent of renderer input or disk-worker progress.
+    /// Eight seconds cover guard/configuration startup and cleanup.
+    pub fn helper_lifetime_secs(&self) -> u64 {
+        self.duration_secs
+            .saturating_add(self.typing_limit_secs)
+            .saturating_add(8)
+    }
+
     pub fn validate(&self) -> Result<(), String> {
         if self.version != 1 {
             return Err("Unsupported settings version; your file has not been overwritten.".into());
@@ -352,6 +360,7 @@ mod tests {
                 ..Settings::default()
             };
             settings.validate().unwrap();
+            assert_eq!(settings.helper_lifetime_secs(), 5 + limit + 8);
             assert_eq!(
                 serde_json::from_str::<Settings>(&serde_json::to_string(&settings).unwrap())
                     .unwrap(),

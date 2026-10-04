@@ -1,5 +1,7 @@
 //! One coordinated, short-lived native overlay on every selected output.
 use crate::{
+    activity::{Activity, Expiry},
+    activity_log::{Entry, PendingSave},
     config::{Settings, validate_quotes},
     guard::Guard,
     process::{Singleton, boot_time, desktop_connection},
@@ -10,7 +12,10 @@ use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState},
     delegate_registry,
     output::{OutputHandler, OutputState},
-    reexports::{calloop::EventLoop, calloop_wayland_source::WaylandSource},
+    reexports::{
+        calloop::{EventLoop, LoopHandle},
+        calloop_wayland_source::WaylandSource,
+    },
     registry::{ProvidesRegistryState, RegistryState},
     registry_handlers,
     seat::{
@@ -25,7 +30,10 @@ use smithay_client_toolkit::{
             LayerSurfaceConfigure,
         },
     },
-    shm::{Shm, ShmHandler, slot::SlotPool},
+    shm::{
+        Shm, ShmHandler,
+        slot::{Buffer, SlotPool},
+    },
 };
 use std::{collections::HashMap, error::Error, io::Read, time::Duration};
 use wayland_client::{
@@ -41,16 +49,18 @@ Usage: naal-focus-overlay [OPTIONS]
   --once               Show one reminder (default); never runs its own timer
   --all                Cover all monitors (default)
   --output NAME        Cover one named monitor for manual testing
-  --duration-secs N    Visible timeout, 1–30 (default 5)
+  --duration-secs N    Normal visible countdown, 1–30 (default 5)
+  --typing-limit-secs N  Typing deadline, 30–600 (default 120)
   --delay-secs N       Delay before showing, 0–60 (default 0)
   --text-size N        Logical text size, 22–72 (default 36)
   --idle-secs N        Skip idle sessions, 30–3600 (default 120)
   --stdin              Read one raw UTF-8 quote (including line breaks) from stdin
   -h, --help           Print help
 
-WARNING: captures keyboard focus on all covered monitors. Escape or a mouse
-button release dismisses ALL surfaces. Other keys are consumed, never logged.
-Always auto-dismisses. This is not a screen lock or security boundary.
+WARNING: captures keyboard focus on all covered monitors. Type to reflect;
+Enter saves text locally. Typing holds the normal countdown up to the typing
+limit. Escape/background click while typing discards and resumes; otherwise
+it dismisses ALL surfaces. No raw keys are logged. This is not a screen lock.
 ";
 
 #[derive(Debug, Default)]
@@ -81,6 +91,9 @@ impl Options {
                     )
                 }
                 "--duration-secs" => options.settings.duration_secs = number(&arg, args.next())?,
+                "--typing-limit-secs" => {
+                    options.settings.typing_limit_secs = number(&arg, args.next())?
+                }
                 "--delay-secs" => options.delay = number(&arg, args.next())?,
                 "--text-size" => {
                     options.settings.text_size = number(&arg, args.next())?
@@ -137,6 +150,7 @@ pub fn run(mut options: Options) -> Result<(), Box<dyn Error>> {
     let layer_shell = LayerShell::bind(&globals, &qh)
         .map_err(|e| format!("Desktop does not expose wlr-layer-shell: {e}"))?;
     let shm = Shm::bind(&globals, &qh)?;
+    let mut event_loop: EventLoop<App> = EventLoop::try_new()?;
     let mut app = App {
         registry: RegistryState::new(&globals),
         seats: SeatState::new(&globals, &qh),
@@ -155,6 +169,18 @@ pub fn run(mut options: Options) -> Result<(), Box<dyn Error>> {
         text_size: options.settings.text_size,
         requested_at: None,
         mapped_at: None,
+        activity: Activity::new(
+            Duration::from_secs(options.settings.duration_secs),
+            Duration::from_secs(options.settings.typing_limit_secs),
+        ),
+        save: None,
+        saved_entry: None,
+        retry_entry: None,
+        modifiers: HashMap::new(),
+        pointer_inside: HashMap::new(),
+        loop_handle: event_loop.handle(),
+        dirty: false,
+        last_paint: Duration::ZERO,
     };
     queue.roundtrip(&mut app)?;
     queue.roundtrip(&mut app)?;
@@ -207,7 +233,6 @@ pub fn run(mut options: Options) -> Result<(), Box<dyn Error>> {
     }
     let _singleton = Singleton::acquire("overlay")?;
     app.font = Some(render::default_font()?);
-    let mut event_loop: EventLoop<App> = EventLoop::try_new()?;
     WaylandSource::new(conn.clone(), queue).insert(event_loop.handle())?;
     let show_at = boot_time() + Duration::from_secs(options.delay);
     loop {
@@ -220,14 +245,16 @@ pub fn run(mut options: Options) -> Result<(), Box<dyn Error>> {
         }
         if app.requested_at.is_none() && now >= show_at {
             app.show(&qh, &selected);
-            arm_watchdog(options.settings.duration_secs + 8);
+            arm_watchdog(options.settings.helper_lifetime_secs());
         }
         event_loop.dispatch(Duration::from_millis(50), &mut app)?;
-        if let Some(mapped_at) = app.mapped_at
-            && boot_time().saturating_sub(mapped_at)
-                >= Duration::from_secs(options.settings.duration_secs)
-        {
-            app.reason = Some("timeout");
+        let now = boot_time();
+        app.poll_save(now);
+        if let Some(expiry) = app.activity.expired(now) {
+            app.reason = Some(match expiry {
+                Expiry::Normal => "timeout",
+                Expiry::Typing => "typing-limit",
+            });
         }
         if app
             .requested_at
@@ -240,6 +267,9 @@ pub fn run(mut options: Options) -> Result<(), Box<dyn Error>> {
             app.active.clear();
             conn.flush()?;
             return Err(error.into());
+        }
+        if app.reason.is_none() && app.failure.is_none() {
+            app.repaint(now)?;
         }
         if let Some(reason) = app.reason.take() {
             println!(
@@ -274,6 +304,13 @@ struct Active {
     scale: i32,
     mapped: bool,
     keyboard_focus_observed: bool,
+    buffers: Vec<Buffer>,
+    buffer_size: (u32, u32, u32),
+}
+struct SaveJob {
+    generation: u64,
+    entry: Entry,
+    result: PendingSave,
 }
 struct App {
     registry: RegistryState,
@@ -293,8 +330,145 @@ struct App {
     text_size: u32,
     requested_at: Option<Duration>,
     mapped_at: Option<Duration>,
+    activity: Activity,
+    save: Option<SaveJob>,
+    saved_entry: Option<Entry>,
+    retry_entry: Option<(u64, Entry)>,
+    modifiers: HashMap<wl_keyboard::WlKeyboard, Modifiers>,
+    pointer_inside: HashMap<wl_pointer::WlPointer, bool>,
+    loop_handle: LoopHandle<'static, App>,
+    dirty: bool,
+    last_paint: Duration,
 }
 impl App {
+    fn submit(&mut self) {
+        // One in-flight submission: repeated Enter/monitor events cannot duplicate it.
+        if self.save.is_some() {
+            return;
+        }
+        if self.activity.close_unchanged() {
+            return;
+        }
+        let Some((generation, text)) = self.activity.submission() else {
+            return;
+        };
+        let candidate = if let Some(original) = &self.saved_entry {
+            original.corrected(&text)
+        } else if let Some((cached_generation, cached)) = &self.retry_entry
+            && *cached_generation == generation
+            && cached.text == text
+        {
+            Ok(cached.clone())
+        } else {
+            Entry::submitted(&text)
+        };
+        let entry = match candidate {
+            Ok(entry) => entry,
+            Err(error) => {
+                self.activity.failed(generation, error);
+                return;
+            }
+        };
+        self.retry_entry = Some((generation, entry.clone()));
+        let pending = if let Some(original) = &self.saved_entry {
+            PendingSave::start_correction(original.clone(), entry.clone())
+        } else {
+            PendingSave::start(entry.clone())
+        };
+        match pending {
+            Ok(result) => {
+                self.save = Some(SaveJob {
+                    generation,
+                    entry,
+                    result,
+                })
+            }
+            Err(error) => self.activity.failed(generation, error),
+        }
+    }
+    fn poll_save(&mut self, now: Duration) {
+        let Some(job) = &mut self.save else {
+            return;
+        };
+        let Some(result) = job.result.poll() else {
+            return;
+        };
+        let generation = job.generation;
+        let entry = job.entry.clone();
+        self.save = None;
+        match result {
+            Ok(()) => {
+                self.activity.saved(generation, &entry.text, now);
+                self.saved_entry = Some(entry);
+                self.retry_entry = None;
+            }
+            Err(error) => self.activity.failed(generation, error),
+        }
+        self.dirty = true;
+    }
+    fn key(&mut self, keyboard: &wl_keyboard::WlKeyboard, event: KeyEvent, repeated: bool) {
+        let now = boot_time();
+        if self.mapped_at.is_none() || self.reason.is_some() || self.activity.expired(now).is_some()
+        {
+            return;
+        }
+        if event.keysym == Keysym::Escape {
+            if !repeated && self.activity.cancel(now) {
+                self.reason = Some("escape");
+            }
+            self.dirty = true;
+            return;
+        }
+        if self
+            .save
+            .as_ref()
+            .is_some_and(|job| job.generation == self.activity.generation())
+        {
+            return;
+        }
+        if !self.activity.field_visible() {
+            return;
+        }
+        let modifiers = self.modifiers.get(keyboard).copied().unwrap_or_default();
+        if matches!(event.keysym, Keysym::Return | Keysym::KP_Enter) {
+            if !repeated {
+                self.submit();
+            }
+        } else if modifiers.ctrl && matches!(event.keysym, Keysym::a | Keysym::A) {
+            self.activity.editor.select_all();
+        } else if !modifiers.ctrl && !modifiers.alt && !modifiers.logo {
+            match event.keysym {
+                Keysym::BackSpace => self.activity.backspace(now),
+                Keysym::Delete => self.activity.delete(now),
+                Keysym::Left => self.activity.editor.left(modifiers.shift),
+                Keysym::Right => self.activity.editor.right(modifiers.shift),
+                Keysym::Home => self.activity.editor.home(modifiers.shift),
+                Keysym::End => self.activity.editor.end(modifiers.shift),
+                _ => {
+                    if let Some(text) = &event.utf8 {
+                        self.activity.insert(text, now);
+                    }
+                }
+            }
+        }
+        self.dirty = true;
+    }
+    fn repaint(&mut self, now: Duration) -> Result<(), Box<dyn Error>> {
+        if !self.dirty
+            && (!self.activity.field_visible()
+                || now.saturating_sub(self.last_paint) < Duration::from_millis(250))
+        {
+            return Ok(());
+        }
+        for index in 0..self.active.len() {
+            if self.active[index].mapped {
+                self.draw(index)?;
+            }
+        }
+        self.last_paint = now;
+        self.dirty = false;
+        Ok(())
+    }
     fn show(&mut self, qh: &QueueHandle<Self>, outputs: &[wl_output::WlOutput]) {
         self.requested_at = Some(boot_time());
         for output in outputs {
@@ -321,6 +495,8 @@ impl App {
                 scale,
                 mapped: false,
                 keyboard_focus_observed: false,
+                buffers: Vec::new(),
+                buffer_size: (0, 0, 0),
             });
         }
         println!(
@@ -346,36 +522,113 @@ impl App {
         if total > 64_000_000 {
             return Err("Combined monitor buffers exceed the safety budget.".into());
         }
-        let (buffer, canvas) = self.pool.create_buffer(
-            width as i32,
-            height as i32,
-            width as i32 * 4,
-            wl_shm::Format::Argb8888,
-        )?;
-        render::render(
+        if self.active[index].buffer_size != (width, height, scale) {
+            self.active[index].buffers.clear();
+            self.active[index].buffer_size = (width, height, scale);
+        }
+        let available = self.active[index]
+            .buffers
+            .iter()
+            .position(|buffer| self.pool.canvas(buffer).is_some());
+        let (buffer_index, fresh) = if let Some(index) = available {
+            (index, false)
+        } else if self.active[index].buffers.len() < 2 {
+            let (buffer, _) = self.pool.create_buffer(
+                width as i32,
+                height as i32,
+                width as i32 * 4,
+                wl_shm::Format::Argb8888,
+            )?;
+            self.active[index].buffers.push(buffer);
+            (self.active[index].buffers.len() - 1, true)
+        } else {
+            // Never allocate an unbounded queue of frames if the compositor is
+            // slow or stops releasing buffers during a long writing session.
+            return Ok(());
+        };
+        let buffer = &self.active[index].buffers[buffer_index];
+        let canvas = self.pool.canvas(buffer).ok_or("Buffer is still in use")?;
+        if fresh {
+            render::render(
+                canvas,
+                width as usize,
+                height as usize,
+                self.font.as_ref().ok_or("Font not loaded")?,
+                &self.quote,
+                self.text_size as f32 * scale as f32,
+                scale as f32,
+            );
+        }
+        let now = boot_time();
+        let saving = self
+            .save
+            .as_ref()
+            .is_some_and(|job| job.generation == self.activity.generation());
+        render::render_input(
             canvas,
             width as usize,
             height as usize,
             self.font.as_ref().ok_or("Font not loaded")?,
-            &self.quote,
-            self.text_size as f32 * scale as f32,
             scale as f32,
+            render::InputView {
+                editor: &self.activity.editor,
+                saved_text: self.activity.displayed_text(),
+                progress: self.activity.typing_fraction(now),
+                message: if saving {
+                    Some("Saving…")
+                } else {
+                    self.activity.error.as_deref()
+                },
+                editing: self.activity.editing(),
+                caret_visible: (now.as_millis() / 500).is_multiple_of(2),
+            },
         );
-        let active = &mut self.active[index];
+        // Seed the second buffer now, not on the user's first keystroke. This
+        // avoids another full-screen/font rasterization in the typing path.
+        let seed = if fresh && self.active[index].buffers.len() == 1 {
+            Some(canvas.to_vec())
+        } else {
+            None
+        };
+        let active = &self.active[index];
         let surface = active.layer.wl_surface();
         surface.set_buffer_scale(scale as i32);
-        surface.damage_buffer(0, 0, width as i32, height as i32);
+        if fresh {
+            surface.damage_buffer(0, 0, width as i32, height as i32);
+        } else {
+            let damage = render::input_damage(width as f32, height as f32, scale as f32);
+            surface.damage_buffer(
+                0,
+                damage.y.floor() as i32,
+                width as i32,
+                damage.height.ceil() as i32,
+            );
+        }
         buffer.attach_to(surface)?;
         active.layer.commit();
+        let active = &mut self.active[index];
         if !active.mapped {
             active.mapped = true;
-            self.mapped_at.get_or_insert_with(boot_time);
+            if self.mapped_at.is_none() {
+                self.mapped_at = Some(now);
+                self.activity.mapped(now);
+            }
             let name = self
                 .outputs
                 .info(&active.output)
                 .and_then(|i| i.name)
                 .unwrap_or_else(|| "(unnamed)".into());
             println!("Buffer committed: {name} · {width}x{height} · scale {scale}");
+        }
+        if let Some(seed) = seed {
+            let (buffer, canvas) = self.pool.create_buffer(
+                width as i32,
+                height as i32,
+                width as i32 * 4,
+                wl_shm::Format::Argb8888,
+            )?;
+            canvas.copy_from_slice(&seed);
+            self.active[index].buffers.push(buffer);
         }
         Ok(())
     }
@@ -488,7 +741,13 @@ impl SeatHandler for App {
     ) {
         match capability {
             Capability::Keyboard if !self.keyboards.contains_key(&seat) => {
-                match self.seats.get_keyboard(qh, &seat, None) {
+                match self.seats.get_keyboard_with_repeat(
+                    qh,
+                    &seat,
+                    None,
+                    self.loop_handle.clone(),
+                    Box::new(|app, keyboard, event| app.key(keyboard, event, true)),
+                ) {
                     Ok(k) => {
                         self.keyboards.insert(seat, k);
                     }
@@ -558,22 +817,21 @@ impl KeyboardHandler for App {
         &mut self,
         _: &Connection,
         _: &QueueHandle<Self>,
-        _: &wl_keyboard::WlKeyboard,
+        keyboard: &wl_keyboard::WlKeyboard,
         _: u32,
         event: KeyEvent,
     ) {
-        if !self.active.is_empty() && event.keysym == Keysym::Escape {
-            self.reason = Some("escape");
-        }
+        self.key(keyboard, event, false);
     }
     fn repeat_key(
         &mut self,
         _: &Connection,
         _: &QueueHandle<Self>,
-        _: &wl_keyboard::WlKeyboard,
+        keyboard: &wl_keyboard::WlKeyboard,
         _: u32,
-        _: KeyEvent,
+        event: KeyEvent,
     ) {
+        self.key(keyboard, event, true);
     }
     fn release_key(
         &mut self,
@@ -588,12 +846,13 @@ impl KeyboardHandler for App {
         &mut self,
         _: &Connection,
         _: &QueueHandle<Self>,
-        _: &wl_keyboard::WlKeyboard,
+        keyboard: &wl_keyboard::WlKeyboard,
         _: u32,
-        _: Modifiers,
+        modifiers: Modifiers,
         _: RawModifiers,
         _: u32,
     ) {
+        self.modifiers.insert(keyboard.clone(), modifiers);
     }
 }
 impl PointerHandler for App {
@@ -601,17 +860,53 @@ impl PointerHandler for App {
         &mut self,
         _: &Connection,
         _: &QueueHandle<Self>,
-        _: &wl_pointer::WlPointer,
+        pointer: &wl_pointer::WlPointer,
         events: &[PointerEvent],
     ) {
         for event in events {
-            if self
+            let Some(active) = self
                 .active
                 .iter()
-                .any(|a| a.layer.wl_surface() == &event.surface)
-                && matches!(event.kind, PointerEventKind::Release { .. })
+                .find(|a| a.layer.wl_surface() == &event.surface)
+            else {
+                continue;
+            };
+            let size = active.size;
+            let scale = active.scale.clamp(1, 4) as f32;
+            let field = render::input_rect(size.0 as f32 * scale, size.1 as f32 * scale, scale);
+            let inside = field.contains(
+                event.position.0 as f32 * scale,
+                event.position.1 as f32 * scale,
+            );
+            if matches!(event.kind, PointerEventKind::Press { .. })
+                && inside
+                && !self.activity.field_visible()
             {
-                self.reason = Some("click");
+                self.activity.open_saved(boot_time());
+                self.dirty = true;
+            }
+            let caret = self.font.as_ref().and_then(|font| {
+                render::input_caret(font, &self.activity.editor, size, scale, event.position)
+            });
+            match event.kind {
+                PointerEventKind::Press { .. } => {
+                    self.pointer_inside.insert(pointer.clone(), caret.is_some());
+                    if let Some(caret) = caret {
+                        self.activity.editor.set_cursor(caret, false);
+                        self.dirty = true;
+                    }
+                }
+                PointerEventKind::Release { .. } => {
+                    // A drag beginning inside the field cannot become a background dismissal.
+                    let began_inside = self.pointer_inside.remove(pointer).unwrap_or(false);
+                    if !began_inside && caret.is_none() {
+                        if self.activity.cancel(boot_time()) {
+                            self.reason = Some("click");
+                        }
+                        self.dirty = true;
+                    }
+                }
+                _ => {}
             }
         }
     }
@@ -658,6 +953,8 @@ mod tests {
             vec!["--loop"],
             vec!["--duration-secs", "0"],
             vec!["--duration-secs", "31"],
+            vec!["--typing-limit-secs", "29"],
+            vec!["--typing-limit-secs", "601"],
             vec!["--delay-secs", "61"],
             vec!["--all", "--output", "DP-1"],
             vec!["--output"],

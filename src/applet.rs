@@ -74,7 +74,7 @@ impl App {
             )
             .push(
                 widget::text(
-                    "All monitors · keyboard focus captured · Esc or click dismisses all.",
+                    "All monitors · type to reflect, or just breathe. Enter saves; Esc discards while writing.",
                 )
                 .size(12),
             )

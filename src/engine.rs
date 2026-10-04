@@ -333,7 +333,7 @@ fn supervise(
                     Ok(helper) => {
                         child = Some((
                             helper,
-                            now + Duration::from_secs(settings.duration_secs + 8),
+                            now + Duration::from_secs(settings.helper_lifetime_secs()),
                         ));
                         shared.lock().unwrap().error = None;
                     }
@@ -446,18 +446,24 @@ fn supervise(
     }
 }
 
+fn helper_arguments(settings: &Settings) -> [String; 9] {
+    [
+        "--stdin".into(),
+        "--duration-secs".into(),
+        settings.duration_secs.to_string(),
+        "--typing-limit-secs".into(),
+        settings.typing_limit_secs.to_string(),
+        "--text-size".into(),
+        settings.text_size.to_string(),
+        "--idle-secs".into(),
+        settings.idle_secs.to_string(),
+    ]
+}
+
 fn launch(settings: &Settings, quote: &str) -> Result<ManagedChild, String> {
     let mut command = helper_command()?;
     command
-        .args([
-            "--stdin",
-            "--duration-secs",
-            &settings.duration_secs.to_string(),
-            "--text-size",
-            &settings.text_size.to_string(),
-            "--idle-secs",
-            &settings.idle_secs.to_string(),
-        ])
+        .args(helper_arguments(settings))
         .stdin(Stdio::piped())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit());
@@ -480,6 +486,31 @@ mod tests {
     use super::*;
 
     #[test]
+    fn helper_receives_the_validated_typing_budget() {
+        let settings = Settings {
+            duration_secs: 30,
+            typing_limit_secs: 600,
+            text_size: 48,
+            idle_secs: 900,
+            ..Settings::default()
+        };
+        settings.validate().unwrap();
+        let helper = crate::overlay::Options::parse(helper_arguments(&settings))
+            .unwrap()
+            .unwrap();
+        assert!(helper.stdin);
+        assert_eq!(helper.settings.duration_secs, 30);
+        assert_eq!(helper.settings.typing_limit_secs, 600);
+        assert_eq!(helper.settings.text_size, 48);
+        assert_eq!(helper.settings.idle_secs, 900);
+        assert_eq!(settings.helper_lifetime_secs(), 638);
+        assert_eq!(
+            helper.settings.helper_lifetime_secs(),
+            settings.helper_lifetime_secs()
+        );
+    }
+
+    #[test]
     fn remote_commands_cannot_stop_the_owner_or_bypass_validation() {
         for request in [
             Request::Shutdown,
@@ -488,6 +519,10 @@ mod tests {
             Request::Snooze(Duration::from_secs(86401)),
             Request::Settings(Settings {
                 duration_secs: 0,
+                ..Settings::default()
+            }),
+            Request::Settings(Settings {
+                typing_limit_secs: 601,
                 ..Settings::default()
             }),
         ] {
