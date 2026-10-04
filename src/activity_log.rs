@@ -8,6 +8,7 @@ use std::{
         unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt},
     },
     path::{Path, PathBuf},
+    sync::mpsc::{self, Receiver, TryRecvError},
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -62,8 +63,49 @@ pub fn directory() -> Result<PathBuf, String> {
         .ok_or_else(|| "An absolute HOME is required to save activity logs.".into())
 }
 
+/// One in-flight durable save. Polling never blocks the input/render loop.
+pub struct PendingSave {
+    result: Receiver<Result<(), String>>,
+    done: bool,
+}
+impl PendingSave {
+    pub fn start(entry: Entry) -> Result<Self, String> {
+        Self::start_with(entry, |entry| save(&entry))
+    }
+    fn start_with(
+        entry: Entry,
+        write: impl FnOnce(Entry) -> Result<(), String> + Send + 'static,
+    ) -> Result<Self, String> {
+        let (tx, rx) = mpsc::sync_channel(1);
+        std::thread::Builder::new()
+            .name("activity-save".into())
+            .spawn(move || {
+                let _ = tx.send(write(entry));
+            })
+            .map_err(|_| "Cannot start activity save; try again.")?;
+        Ok(Self {
+            result: rx,
+            done: false,
+        })
+    }
+    pub fn poll(&mut self) -> Option<Result<(), String>> {
+        if self.done {
+            return None;
+        }
+        let result = match self.result.try_recv() {
+            Ok(result) => result,
+            Err(TryRecvError::Empty) => return None,
+            Err(TryRecvError::Disconnected) => {
+                Err("Activity save worker stopped; inspect the log before retrying.".into())
+            }
+        };
+        self.done = true;
+        Some(result)
+    }
+}
+
 pub fn save(entry: &Entry) -> Result<(), String> {
-    append_in(&directory()?, entry).map_err(|e| format!("Activity was not saved: {e}"))
+    append_in(&directory()?, entry).map_err(|e| format!("Activity save failed: {e}"))
 }
 
 /// Nonblocking file locking keeps concurrent writes out of one another's records.
@@ -76,11 +118,11 @@ fn append_in(directory: &Path, entry: &Entry) -> Result<(), String> {
     }
     let mut bytes = serde_json::to_vec(entry).map_err(|e| e.to_string())?;
     bytes.push(b'\n');
-    match DirBuilder::new().mode(0o700).create(directory) {
-        Ok(()) => {}
-        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+    let created = match DirBuilder::new().mode(0o700).create(directory) {
+        Ok(()) => true,
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => false,
         Err(e) => return Err(e.to_string()),
-    }
+    };
     // Open the directory itself without following a symlink, then use openat
     // so a renamed/replaced path cannot redirect this save elsewhere.
     let dir = OpenOptions::new()
@@ -135,7 +177,25 @@ fn append_in(directory: &Path, entry: &Entry) -> Result<(), String> {
     // only after the entire appended line has been synced. A reported append
     // failure rolls back our own bytes under the lock, never previous records.
     dir.sync_all().map_err(|e| e.to_string())?;
-    if let Err(error) = file.write_all(&bytes).and_then(|()| file.sync_all()) {
+    if created {
+        // Also persist the new .naal-focus entry in HOME before acknowledging.
+        File::open(
+            directory
+                .parent()
+                .ok_or("Missing activity directory parent.")?,
+        )
+        .and_then(|parent| parent.sync_all())
+        .map_err(|e| e.to_string())?;
+    }
+    append_transaction(&mut file, original_len, |file| file.write_all(&bytes))
+}
+
+fn append_transaction(
+    file: &mut File,
+    original_len: u64,
+    write: impl FnOnce(&mut File) -> std::io::Result<()>,
+) -> Result<(), String> {
+    if let Err(error) = write(file).and_then(|()| file.sync_all()) {
         if file
             .set_len(original_len)
             .and_then(|()| file.sync_all())
@@ -247,6 +307,60 @@ mod tests {
         let before = fs::read(&path).unwrap();
         assert!(append_in(&temp.0, &entry("New")).is_err());
         assert_eq!(fs::read(&path).unwrap(), before);
+    }
+
+    #[test]
+    fn worker_acknowledges_once_and_only_after_persistence() {
+        let temp = Temp::new();
+        let directory = temp.0.clone();
+        let (ready_tx, ready_rx) = mpsc::sync_channel(1);
+        let (go_tx, go_rx) = mpsc::sync_channel(1);
+        let mut pending = PendingSave::start_with(entry("Reading"), move |entry| {
+            ready_tx.send(()).unwrap();
+            go_rx.recv().unwrap();
+            append_in(&directory, &entry)
+        })
+        .unwrap();
+        ready_rx
+            .recv_timeout(std::time::Duration::from_secs(3))
+            .unwrap();
+        assert!(pending.poll().is_none());
+        assert!(!temp.0.join("activity.jsonl").exists());
+        go_tx.send(()).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        loop {
+            if let Some(result) = pending.poll() {
+                result.unwrap();
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(pending.poll().is_none());
+        assert_eq!(
+            fs::read_to_string(temp.0.join("activity.jsonl"))
+                .unwrap()
+                .lines()
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn partial_write_failure_rolls_back_only_the_new_record() {
+        let temp = Temp::new();
+        append_in(&temp.0, &entry("Previous")).unwrap();
+        let path = temp.0.join("activity.jsonl");
+        let before = fs::read(&path).unwrap();
+        let mut file = OpenOptions::new().append(true).open(&path).unwrap();
+        let result = append_transaction(&mut file, before.len() as u64, |file| {
+            file.write_all(b"{partial")?;
+            Err(std::io::Error::other("injected write failure"))
+        });
+        assert!(result.is_err());
+        assert_eq!(fs::read(&path).unwrap(), before);
+        append_in(&temp.0, &entry("Retry")).unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap().lines().count(), 2);
     }
 
     #[test]
