@@ -1,3 +1,4 @@
+pub mod activity_log;
 #[cfg(feature = "applet")]
 pub mod applet;
 pub mod config;
