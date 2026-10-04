@@ -29,6 +29,8 @@ Uninstalling also leaves `~/.naal-focus/` activity history untouched. Both scrip
 
 ## Settings and controls
 
+Click the panel/dock icon for a compact popup with status, the recurring-reminders toggle, **Show now**, **Snooze 15 min** (or **Resume** while snoozed), and **Settings…**. Detailed preferences and quote editing live only in the dedicated settings window, grouped into **Timing**, **Appearance**, and **Reflection**. The window stays open when clicking elsewhere. Reopening settings activates the existing window rather than creating another; `naal-focus --settings` uses the same entry point.
+
 Settings live at `$XDG_CONFIG_HOME/naal-focus/settings.json`, falling back to `~/.config/naal-focus/settings.json`. Saves are atomic. Invalid, oversized, or unsupported-version files remain untouched until explicit **Save settings** replaces them.
 
 | Setting | Default | Range |
@@ -41,10 +43,10 @@ Settings live at `$XDG_CONFIG_HOME/naal-focus/settings.json`, falling back to `~
 | Idle threshold | 120 seconds | 30–3600 |
 | Quotes | Four reminders | 1–100; ≤500 characters each, including line breaks |
 
-- **Save settings** applies edited fields together, cancels pending/visible reminders, and restarts the interval. Other popups refresh saved values without overwriting unsaved edits.
+- **Save settings** applies edited fields together, cancels pending/visible reminders, and restarts the interval. The settings window follows shared saved values without overwriting unsaved edits. A failed save retains its draft.
 - **Recurring reminders** persists immediately.
 - **Snooze 15 min** is temporary. A full interval follows the snooze; it does not survive closing every instance.
-- **Resume** enables paused reminders or clears a snooze. It is disabled when neither action is needed.
+- **Resume** replaces Snooze while snoozed. It clears the snooze, or enables reminders if they were paused. Otherwise use the recurring-reminders toggle to unpause.
 - **Show now** waits two seconds before displaying a one-shot reminder. It works while recurrence is paused, but cannot bypass safety guards.
 
 Every monitor popup and `naal-focus --settings` shares one timer through session D-Bus. Closing a secondary instance leaves reminders running. If the owner closes, another instance takes over with the remaining snooze and a fresh interval. Closing all instances stops reminders and the helper.
@@ -92,11 +94,12 @@ just build          # Debug applet and helper
 just release        # Release binaries
 just check          # Formatting, Clippy, unit tests, shell syntax
 just check-native   # Isolated multi-client supervisor regression
+just check-settings # Isolated settings-window process regression; opens a window
 just probe          # Read-only monitor/protocol/safety check
-just settings       # Standalone controls; honors saved reminder preferences
+just settings       # Open/focus settings; honors saved reminder preferences
 ```
 
-`check-native` uses a private D-Bus session/runtime and never requests overlays or enables recurrence. `probe` creates no surfaces. Run `just` to list all recipes.
+`check-native` uses a private D-Bus session/runtime and never requests overlays or enables recurrence. `check-settings` additionally uses temporary preferences and opens a real settings window to check concurrent launches, reopening, and process exit without stopping the shared supervisor; it never enables reminders or requests overlays. Its private bus disables desktop-service auto-start. `probe` creates no surfaces. Run `just` to list all recipes.
 
 See the [testing guide](TESTING.md) for coverage, recorded verification results, and manual acceptance checks. **Manual overlays capture keyboard focus**; use a disposable editor document and save other work first. A manually launched helper has no independent parent watchdog; SIGSTOP pauses its own timeout too.
 
@@ -124,7 +127,7 @@ This is not a screen lock. Compositor shortcuts can still work; focus restoratio
 
 | Files | Responsibility |
 |---|---|
-| `src/applet.rs` | Native controls and popup |
+| `src/applet.rs`, `src/applet/` | Quick popup, grouped settings draft, desktop launch and single-window activation |
 | `src/config.rs` | Settings, quote parsing/formatting, persistence |
 | `src/activity.rs`, `src/activity_log.rs` | Reflection editing/countdowns, private history and atomic corrections |
 | `src/schedule.rs` | Scheduling, snooze, quote rotation |

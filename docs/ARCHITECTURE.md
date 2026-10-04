@@ -16,7 +16,7 @@ flowchart TD
 
 | Component | Responsibility |
 |---|---|
-| `naal-focus` (`src/bin/applet.rs`, `src/applet.rs`) | COSMIC dock/panel icon and controls; `--settings` opens the same controls in a standalone window. Built with the `applet` feature. |
+| `naal-focus` (`src/bin/applet.rs`, `src/applet.rs`) | COSMIC dock/panel icon and compact quick controls; Settings… / `--settings` opens or activates a dedicated grouped settings window. Built with the `applet` feature. |
 | `Engine` (`src/engine.rs`) | Background control client or elected supervisor. Publishes shared status, applies requests, and owns at most one helper. |
 | `Schedule` (`src/schedule.rs`) | Pure interval, snooze, and sequential quote-rotation policy. |
 | `Guard` (`src/guard.rs`) | Checks session state through system D-Bus/logind and input idle state through Wayland. |
@@ -53,7 +53,15 @@ The control object is `/io/github/rinaldo_rex/NaalFocus/Control`, with interface
 - A brief process-lock overlap during replacement is retried instead of permanently disconnecting the controls.
 - Closing every instance stops reminders. There is no separately installed daemon or service, and snoozes do not persist across a complete shutdown.
 
-UI status is sampled rather than instantaneous: the owner processes its loop about every 100 ms, clients poll about every 250 ms, and controls refresh once per second. A popup's unsaved edits are retained when shared settings change.
+UI status is sampled rather than instantaneous: the owner processes its loop about every 100 ms, clients poll about every 250 ms, and controls refresh once per second. Settings drafts retain unsaved edits when shared settings change, including after a failed save or typing after a save request. The draft becomes clean when shared status matches the requested settings without an error.
+
+## Quick controls and settings window
+
+The popup contains only status, immediate reminder controls, and a Settings… entry point. The separate resizable desktop window groups configuration into Timing, Appearance, and Reflection, with a native quote editor and explicit Save.
+
+`src/applet/launch.rs` launches the same binary with `--settings`, detached from the panel lifetime. It removes nested/privileged Wayland socket variables, resets panel scaling and stale launch-token overrides, and routes `WAYLAND_DISPLAY` to the validated desktop socket. COSMIC's applet-token subscription obtains a host-compositor activation token through the privileged channel; a panel-local token cannot authorize desktop focus. The window consumes the startup token after opening, while libcosmic handles tokens forwarded over its D-Bus activation interface for an existing window.
+
+A separate `naal-focus-settings-window.lock` in `XDG_RUNTIME_DIR` serializes startup and the window lifetime, closing the race between simultaneous launches from different panels before D-Bus registration. A losing launcher retries activation for up to five seconds rather than creating a duplicate window. This window lock is independent of the shared-supervisor lock; closing settings does not shut down another applet's supervisor. If settings is the only remaining client, the existing all-instances-closed rule still applies.
 
 ## Desktop versus panel compositor
 

@@ -18,8 +18,8 @@ Add **Naal Focus** through **COSMIC Settings → Desktop → Dock/Panel → Appl
 ## Use
 
 - New settings default to **paused**. Enable **Recurring reminders** when ready.
-- Set the interval, duration, and text size, then **Save settings**.
-- Use **Snooze 15 min**, **Resume**, or **Show now** as needed.
+- The compact popup offers **Show now**, **Snooze 15 min** (or **Resume** while snoozed), and the reminders toggle.
+- Open **Settings…** for timing, appearance, and reflection/quotes, then **Save settings**. Reopening brings the existing window forward; closing it leaves the applet running.
 
 All monitor popups share the same settings and timer. Updates preserve existing preferences.
 
@@ -27,7 +27,7 @@ All monitor popups share the same settings and timer. Updates preserve existing 
 
 The quiet textbox is ready for typing without a click. Typing holds the normal countdown; **Enter** saves locally and resumes the remaining time. Saved text replaces the textbox—click it to correct the same entry. Clicking alone does not pause the countdown; changing text does.
 
-Set **Typing time limit** in the widget (default two minutes, adjustable from 30 seconds to ten minutes). A subtle underline shows time remaining while writing. Doing nothing preserves the normal reminder timeout.
+Set **Typing time limit** under **Settings… → Reflection** (default two minutes, adjustable from 30 seconds to ten minutes). A subtle underline shows time remaining while writing. Doing nothing preserves the normal reminder timeout.
 
 Logs stay private at `~/.naal-focus/activity.jsonl`. Only submitted text and its timestamp are recorded; no raw keystrokes or writing duration. The dashboard is a separate, future feature. See the [activity reference](docs/REFERENCE.md#activity-reflections-and-history) for details.
 

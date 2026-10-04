@@ -11,6 +11,7 @@ Run from the repository root:
 ```sh
 just check          # Formatting, Clippy, applet-enabled unit tests, shell syntax
 just check-native   # Three-client supervisor test in a private D-Bus session/runtime
+just check-settings # Opens an isolated settings window; no reminders or overlays
 just probe          # Read-only check of the current desktop, outputs, and guards
 ```
 
@@ -21,6 +22,8 @@ cargo test --locked
 ```
 
 `just check` skips the native integration test by design. Run `just check-native` separately inside an active, unlocked COSMIC Wayland session with `dbus-run-session` available. Its script isolates the session bus, runtime locks, and settings file, but still connects to the real desktop compositor and system logind. It never enables recurrence or requests an overlay and does not contact the installed applet's control service.
+
+`just check-settings` is a separate opt-in native UI-process regression. It launches concurrent settings processes on a private bus/runtime with temporary preferences, checks that only one survives, verifies reopening reuses its PID, and terminates/relaunches that process while the separate supervisor stays available. The private bus does not auto-start desktop services. Recurrence remains paused and no overlay is requested. This does not establish visible layout, token-authorized focus, or header-bar close-button behavior.
 
 `just probe` creates no surfaces and captures no focus. It reports monitor names, logical dimensions, scale factors, and session-guard status. Read the printed guard status as well as the exit code: a completed probe can report that reminders are blocked. Protocol availability is not proof of successful rendering or focus restoration.
 
@@ -35,10 +38,26 @@ cargo test --locked
 | Safety | Missing/stale observations block reminders; idle and lock reasons propagate | All live logind, COSMIC lock-marker, and input-seat transitions |
 | Process lifetime | Monotonic boot clock, singleton exclusion/release, child kill-and-reap on drop | Stalled renderer watchdog and parent-death signaling under live overlays |
 | Overlay input and rendering | CLI/stdin limits, parent/helper budget propagation, multiline layout, wrapping, premultiplied pixels, input hit-testing/scale/scroll, progress pixels, cached-background preservation across saved/editing transitions | Wayland surface lifecycle, visible readability, keyboard suppression, dismissal, focus restoration, output hotplug |
-| Native applet helpers | Multiline editor content and Resume request selection | Dock/panel popup layout, unsaved-edit synchronization across visible windows |
+| Native applet helpers | Multiline editor content, Snooze/Resume selection, desktop launch environment, settings validation, clean/dirty synchronization, failed-save and post-save draft retention | Dock/panel popup layout, unsaved-edit synchronization across visible windows |
+| Settings-window process | Concurrent startup exclusion, existing-process activation, window-lock release/relaunch, supervisor survival after settings-process termination | Visible layout, click-outside persistence, host activation-token focus/raise, header-bar close, real field/button interactions |
 | Shared supervisor | Three clients share settings/snooze, corrupt-file repair, lock-overlap retry, secondary shutdown, owner takeover, snooze retention | Cross-process crash scenarios, live helper cancellation during takeover |
 
 ## Latest recorded verification
+
+### Settings-window separation
+
+Checked on **2026-10-04** at `552ef9a7` (feature code: `0749de2a`):
+
+- `just check`: formatting, warnings-denied Clippy, 52 applet-enabled unit tests, and shell syntax passed.
+- `just check-native`: isolated three-client supervisor regression passed.
+- `just check-settings`: isolated concurrent-launch / reopen / process-termination / relaunch regression passed.
+- `cargo test --locked`: 44 core/helper unit tests passed.
+
+No installation or changes to real reminder preferences were made. The first native settings test passed its assertions but auto-started desktop portals whose temporary mounts interfered with cleanup; the harness was changed to disable service auto-start, and the complete command then passed cleanly.
+
+**Still awaiting manual acceptance for #3:** compact popup layout; grouped settings readability and resizing; Settings… from the actual panel opening/raising an existing (including minimized) window; click-outside persistence; header-bar closing; visible validation/save feedback and draft preservation. Process activation success does not prove that the compositor focused or raised the window.
+
+### Activity-logging verification
 
 Checked on **2026-10-04** against the activity-logging application source at `b8eea096`:
 
@@ -92,7 +111,8 @@ HOME="$test_home" ./target/debug/naal-focus-overlay --once --all --delay-secs 15
 | Deadline and persistence failure | An unfinished draft closes at the typing limit with no auto-save. Cancel/reopen cannot renew the allowance. A save error retains the draft without claiming success; watchdogs remain active. |
 | Focus restoration | After each dismissal method, the intended application accepts typing again. Restoration is compositor-controlled. |
 | Multiline quotes | Hard line breaks, blank paragraphs, literal bullets, long words, and long quotes remain understandable. Use a suitable duration for reading. |
-| Panel and standalone controls | Both display shared saved settings/status; another client's save does not overwrite unsaved edits. Resume enables paused reminders or clears a snooze. |
+| Compact panel controls | Icon opens only status, reminders on/off, Show now, Snooze (or Resume while snoozed), and Settings…. No preferences/editor; safe controls remain usable in a small popup. |
+| Settings window | Settings… opens a grouped, resizable normal window. Clicking elsewhere leaves it open; reopening raises the same window, including when minimized. Closing via its header bar leaves panel reminders running. Saved values/status synchronize; another client's save or a failed save does not overwrite a draft. Typing after Save survives its later acknowledgment. |
 | Recurring reminders and snooze | Opt in using controls. No reminder appears before a full interval; snoozing cancels visible/pending reminders, then waits the snooze plus a full interval. Disable recurrence afterward. |
 | Lock, idle, and suspend | Through the supervised applet, unsafe sessions suppress/cancel reminders. Returning waits a full interval with no catch-up burst. Save work before lock/suspend. |
 | Output hotplug and scaling | Adding/removing outputs during a visible reminder dismisses all surfaces. Repeat presentation tests at supported scales; fractional scaling is a documented limitation. |
