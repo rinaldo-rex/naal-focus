@@ -116,6 +116,8 @@ pub struct Activity {
     pub error: Option<String>,
     editing: bool,
     mapped: bool,
+    field_visible: bool,
+    saved_text: Option<String>,
     remaining: Duration,
     resumed_at: Option<Duration>,
     typing_started: Option<Duration>,
@@ -129,6 +131,8 @@ impl Activity {
             error: None,
             editing: false,
             mapped: false,
+            field_visible: true,
+            saved_text: None,
             remaining: duration,
             resumed_at: None,
             typing_started: None,
@@ -144,6 +148,43 @@ impl Activity {
     }
     pub fn editing(&self) -> bool {
         self.editing
+    }
+    pub fn field_visible(&self) -> bool {
+        self.field_visible
+    }
+    pub fn displayed_text(&self) -> Option<&str> {
+        if self.field_visible {
+            None
+        } else {
+            self.saved_text.as_deref()
+        }
+    }
+    pub fn open_saved(&mut self, now: Duration) -> bool {
+        if self.field_visible || self.expired(now).is_some() {
+            return false;
+        }
+        let Some(text) = &self.saved_text else {
+            return false;
+        };
+        self.editor = Editor::default();
+        if self.editor.insert(text).is_err() {
+            return false;
+        }
+        self.field_visible = true;
+        self.error = None;
+        true
+    }
+    /// Enter without changes simply leaves the editor, without resetting time.
+    pub fn close_unchanged(&mut self) -> bool {
+        if self.field_visible && !self.editing && self.saved_text.is_some() {
+            self.editor = Editor::default();
+            self.field_visible = false;
+            self.error = None;
+            self.generation += 1;
+            true
+        } else {
+            false
+        }
     }
     pub fn generation(&self) -> u64 {
         self.generation
@@ -165,10 +206,7 @@ impl Activity {
         })
     }
     pub fn expired(&self, now: Duration) -> Option<Expiry> {
-        if self
-            .typing_started
-            .is_some_and(|at| now.saturating_sub(at) >= self.typing_limit)
-        {
+        if self.editing && self.typing_expired(now) {
             Some(Expiry::Typing)
         } else if self.resumed_at.is_some() && self.remaining(now).is_zero() {
             Some(Expiry::Normal)
@@ -176,19 +214,36 @@ impl Activity {
             None
         }
     }
+    fn typing_expired(&self, now: Duration) -> bool {
+        self.typing_started
+            .is_some_and(|at| now.saturating_sub(at) >= self.typing_limit)
+    }
+    fn can_modify(&mut self, now: Duration) -> bool {
+        if !self.field_visible || !self.mapped || self.expired(now).is_some() {
+            return false;
+        }
+        if self.typing_expired(now) {
+            self.error = Some("Typing time used — take a breath and return.".into());
+            return false;
+        }
+        true
+    }
+    fn pause(&mut self, now: Duration) {
+        if !self.editing {
+            self.remaining = self.remaining(now);
+            self.resumed_at = None;
+            self.typing_started.get_or_insert(now);
+            self.editing = true;
+        }
+        self.error = None;
+    }
     pub fn insert(&mut self, text: &str, now: Duration) -> bool {
-        if self.expired(now).is_some() || (!self.editing && self.resumed_at.is_none()) {
+        if !self.can_modify(now) {
             return false;
         }
         match self.editor.insert(text) {
             Ok(true) => {
-                if !self.editing {
-                    self.remaining = self.remaining(now);
-                    self.resumed_at = None;
-                    self.typing_started.get_or_insert(now);
-                    self.editing = true;
-                }
-                self.error = None;
+                self.pause(now);
                 true
             }
             Ok(false) => false,
@@ -198,8 +253,27 @@ impl Activity {
             }
         }
     }
+    pub fn backspace(&mut self, now: Duration) {
+        self.erase(now, Editor::backspace);
+    }
+    pub fn delete(&mut self, now: Duration) {
+        self.erase(now, Editor::delete);
+    }
+    fn erase(&mut self, now: Duration, change: fn(&mut Editor)) {
+        if !self.can_modify(now) {
+            return;
+        }
+        let before = self.editor.text().to_owned();
+        change(&mut self.editor);
+        if self.editor.text() != before {
+            self.pause(now);
+        }
+    }
     /// true means normal immediate dismissal; false means cancel and resume.
     pub fn cancel(&mut self, now: Duration) -> bool {
+        if self.close_unchanged() {
+            return false;
+        }
         if !self.editing {
             return true;
         }
@@ -221,10 +295,14 @@ impl Activity {
             }
         }
     }
-    /// Ignore acknowledgment from a submission cancelled while I/O was pending.
-    pub fn saved(&mut self, generation: u64, now: Duration) {
+    /// A late acknowledgment updates accepted text but never erases a newer draft.
+    pub fn saved(&mut self, generation: u64, text: &str, now: Duration) {
+        self.saved_text = Some(text.to_owned());
         if self.editing && self.generation == generation {
             self.resume(now);
+        } else if !self.editing {
+            self.editor = Editor::default();
+            self.field_visible = false;
         }
     }
     pub fn failed(&mut self, generation: u64, error: String) {
@@ -236,6 +314,7 @@ impl Activity {
         self.editor = Editor::default();
         self.error = None;
         self.editing = false;
+        self.field_visible = self.saved_text.is_none();
         self.resumed_at = Some(now);
         self.generation += 1;
         // Never clear typing_started: cancellation cannot renew the deadline.
@@ -275,7 +354,7 @@ mod tests {
             if save {
                 let (id, text) = a.submission().unwrap();
                 assert_eq!(text, "Reading");
-                a.saved(id, at(100));
+                a.saved(id, &text, at(100));
             } else {
                 assert!(!a.cancel(at(100)));
             }
@@ -306,7 +385,7 @@ mod tests {
         let (old, _) = a.submission().unwrap();
         a.cancel(at(20));
         a.insert("New", at(21));
-        a.saved(old, at(22));
+        a.saved(old, "First", at(22));
         a.failed(old, "Old failure".into());
         assert_eq!(a.editor.text(), "New");
         assert!(a.editing());
@@ -323,12 +402,64 @@ mod tests {
         assert_eq!(a.remaining(at(30)), Duration::from_millis(2750));
         assert_eq!(a.expired(at(30)), None);
         let (id, _) = a.submission().unwrap();
-        a.saved(id, Duration::from_millis(42_500));
+        a.saved(id, "Reading", Duration::from_millis(42_500));
         assert_eq!(a.expired(Duration::from_millis(45_249)), None);
         assert_eq!(
             a.expired(Duration::from_millis(45_250)),
             Some(Expiry::Normal)
         );
+    }
+
+    #[test]
+    fn saved_text_reopens_without_pausing_until_an_actual_change() {
+        let mut a = activity();
+        a.insert("Reading", at(12));
+        let (id, text) = a.submission().unwrap();
+        a.saved(id, &text, at(20));
+        assert_eq!(a.displayed_text(), Some("Reading"));
+        assert!(!a.field_visible());
+        assert!(!a.insert("Ignored without a click", at(20)));
+        assert!(a.open_saved(at(21)));
+        assert!(!a.editing());
+        assert_eq!(a.remaining(at(22)), at(1));
+        a.backspace(at(22));
+        assert!(a.editing());
+        assert_eq!(a.editor.text(), "Readin");
+        assert_eq!(a.remaining(at(40)), at(1));
+        assert!(!a.cancel(at(40)));
+        assert_eq!(a.displayed_text(), Some("Reading"));
+        assert_eq!(a.expired(at(41)), Some(Expiry::Normal));
+    }
+
+    #[test]
+    fn saved_countdown_is_not_cut_short_by_spent_typing_allowance() {
+        let mut a = activity();
+        a.insert("Reading", at(12));
+        let (id, text) = a.submission().unwrap();
+        a.saved(id, &text, at(131)); // typing expires at 132, but 3 seconds remain
+        assert_eq!(a.expired(at(132)), None);
+        a.open_saved(at(132));
+        a.backspace(at(132)); // cannot renew spent typing time
+        assert_eq!(a.editor.text(), "Reading");
+        assert!(!a.editing());
+        assert_eq!(a.remaining(at(133)), at(1));
+        assert!(a.close_unchanged());
+        assert_eq!(a.expired(at(134)), Some(Expiry::Normal));
+    }
+
+    #[test]
+    fn clicking_and_closing_unchanged_text_never_resets_normal_time() {
+        let mut a = activity();
+        a.insert("Reading", at(12));
+        let (id, text) = a.submission().unwrap();
+        a.saved(id, &text, at(20));
+        a.open_saved(at(21));
+        assert!(a.close_unchanged());
+        assert_eq!(a.remaining(at(22)), at(1));
+        a.open_saved(at(22));
+        assert!(!a.cancel(at(22)));
+        assert_eq!(a.displayed_text(), Some("Reading"));
+        assert_eq!(a.expired(at(23)), Some(Expiry::Normal));
     }
 
     #[test]
