@@ -11,17 +11,21 @@ check:
     cargo fmt --check
     cargo clippy --locked --features applet --all-targets -- -D warnings
     cargo test --locked --features applet
-    bash -n scripts/install.sh scripts/uninstall.sh scripts/test-supervisor.sh
+    bash -n scripts/install.sh scripts/uninstall.sh scripts/test-supervisor.sh scripts/test-settings.sh
 
 # Isolated session/runtime: three control clients, no overlays or recurring timer.
 check-native:
     ./scripts/test-supervisor.sh
 
+# Opens one isolated settings window; recurrence stays paused, no overlays.
+check-settings:
+    ./scripts/test-settings.sh
+
 # Read-only: creates no overlay and captures no focus.
 probe:
     cargo run --locked --bin naal-focus-overlay -- --check
 
-# A real, standalone COSMIC control window; recurring reminders default to paused.
+# Open/focus the dedicated COSMIC settings window; no reminder opt-in.
 settings: build
     ./target/debug/naal-focus --settings
 
