@@ -18,6 +18,7 @@ pub struct Settings {
     pub enabled: bool,
     pub interval_secs: u64,
     pub duration_secs: u64,
+    pub typing_limit_secs: u64,
     pub text_size: u32,
     pub idle_secs: u32,
     pub quotes: Vec<String>,
@@ -31,6 +32,7 @@ impl Default for Settings {
             enabled: false,
             interval_secs: 300,
             duration_secs: 5,
+            typing_limit_secs: 120,
             text_size: 36,
             idle_secs: 120,
             quotes: parse_quotes(DEFAULT_QUOTES).expect("valid bundled quotes"),
@@ -48,6 +50,9 @@ impl Settings {
         }
         if !(1..=30).contains(&self.duration_secs) {
             return Err("Duration must be 1–30 seconds.".into());
+        }
+        if !(30..=600).contains(&self.typing_limit_secs) {
+            return Err("Typing time limit must be 30–600 seconds.".into());
         }
         if self.interval_secs <= self.duration_secs {
             return Err("Interval must exceed the visible duration.".into());
@@ -324,6 +329,35 @@ mod tests {
         assert!(load(&path).is_err());
         assert_eq!(fs::read(&path).unwrap(), b"not json");
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn typing_limit_is_bounded_and_old_settings_get_the_default() {
+        let old: Settings = serde_json::from_str(r#"{"version":1,"duration_secs":5}"#).unwrap();
+        assert_eq!(old.typing_limit_secs, 120);
+        old.validate().unwrap();
+        for limit in [0, 29, 601, u64::MAX] {
+            assert!(
+                Settings {
+                    typing_limit_secs: limit,
+                    ..Settings::default()
+                }
+                .validate()
+                .is_err()
+            );
+        }
+        for limit in [30, 120, 600] {
+            let settings = Settings {
+                typing_limit_secs: limit,
+                ..Settings::default()
+            };
+            settings.validate().unwrap();
+            assert_eq!(
+                serde_json::from_str::<Settings>(&serde_json::to_string(&settings).unwrap())
+                    .unwrap(),
+                settings
+            );
+        }
     }
 
     #[test]

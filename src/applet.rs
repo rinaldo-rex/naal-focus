@@ -23,6 +23,7 @@ pub struct App {
     status: Status,
     interval: String,
     duration: String,
+    typing_limit: String,
     text_size: String,
     idle_secs: String,
     quotes: widget::text_editor::Content<cosmic::Renderer>,
@@ -41,6 +42,7 @@ pub enum Message {
     Resume,
     Interval(String),
     Duration(String),
+    TypingLimit(String),
     TextSize(String),
     IdleSecs(String),
     Quotes(widget::text_editor::Action),
@@ -90,6 +92,12 @@ impl App {
                     .width(100),
             ))
             .push(widget::settings::item(
+                "Typing time limit (30–600 seconds)",
+                widget::text_input("120", &self.typing_limit)
+                    .on_input(Message::TypingLimit)
+                    .width(100),
+            ))
+            .push(widget::settings::item(
                 "Text size (22–72 px)",
                 widget::text_input("36", &self.text_size)
                     .on_input(Message::TextSize)
@@ -134,6 +142,7 @@ impl App {
         if !self.dirty && status.settings != self.status.settings {
             self.interval = status.settings.interval_secs.to_string();
             self.duration = status.settings.duration_secs.to_string();
+            self.typing_limit = status.settings.typing_limit_secs.to_string();
             self.text_size = status.settings.text_size.to_string();
             self.idle_secs = status.settings.idle_secs.to_string();
             self.quotes = widget::text_editor::Content::with_text(&config::format_quotes(
@@ -153,6 +162,10 @@ impl App {
                 .duration
                 .parse()
                 .map_err(|_| "Duration needs an integer.")?,
+            typing_limit_secs: self
+                .typing_limit
+                .parse()
+                .map_err(|_| "Typing time limit needs an integer.")?,
             text_size: self
                 .text_size
                 .parse()
@@ -199,6 +212,7 @@ impl cosmic::Application for App {
             engine,
             interval: settings.interval_secs.to_string(),
             duration: settings.duration_secs.to_string(),
+            typing_limit: settings.typing_limit_secs.to_string(),
             text_size: settings.text_size.to_string(),
             idle_secs: settings.idle_secs.to_string(),
             quotes: widget::text_editor::Content::with_text(&config::format_quotes(
@@ -288,6 +302,10 @@ impl cosmic::Application for App {
             }
             Message::Duration(text) => {
                 self.duration = text;
+                self.dirty = true;
+            }
+            Message::TypingLimit(text) => {
+                self.typing_limit = text;
                 self.dirty = true;
             }
             Message::TextSize(text) => {
