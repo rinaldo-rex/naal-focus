@@ -24,7 +24,7 @@ fontdue = "=0.9.4"
 git = "https://github.com/pop-os/libcosmic"
 rev = "6af8b7051b6e6c3a9d0c42c3b2fc5a14a80afe36"
 default-features = false
-features = ["applet", "tokio", "a11y"]
+features = ["applet-token", "tokio", "a11y", "single-instance", "process"]
 optional = true
 
 [[bin]]
