@@ -73,17 +73,7 @@ just settings       # Standalone controls; honors saved reminder preferences
 
 `check-native` uses a private D-Bus session/runtime and never requests overlays or enables recurrence. `probe` creates no surfaces. Run `just` to list all recipes.
 
-### Manual overlay tests
-
-**These capture keyboard focus.** Use a disposable editor document, not an important terminal command.
-
-```sh
-./target/release/naal-focus-overlay --once --all --delay-secs 3
-# Replace OUTPUT_NAME with a monitor listed by the probe:
-./target/release/naal-focus-overlay --once --output OUTPUT_NAME --delay-secs 3
-```
-
-Check timeout, Escape, click-release, multiline layout, monitor scaling, typing suppression, focus restoration, hotplug, and lock/suspend transitions. Do not lock or suspend while doing unsaved work. A manually launched helper has no independent parent watchdog; SIGSTOP pauses its own timeout too.
+See the [testing guide](TESTING.md) for coverage, recorded verification results, and manual acceptance checks. **Manual overlays capture keyboard focus**; use a disposable editor document and save other work first. A manually launched helper has no independent parent watchdog; SIGSTOP pauses its own timeout too.
 
 ## Runtime safety
 

@@ -1,6 +1,6 @@
 # Architecture and safety
 
-[Quick start](../README.md) · [Reference](REFERENCE.md)
+[Quick start](../README.md) · [Reference](REFERENCE.md) · [Testing](TESTING.md)
 
 Naal Focus separates persistent controls and scheduling from the short-lived process that captures keyboard focus. It is a native COSMIC/Wayland application, not a screen lock.
 
