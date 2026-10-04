@@ -115,6 +115,7 @@ pub struct Activity {
     pub editor: Editor,
     pub error: Option<String>,
     editing: bool,
+    mapped: bool,
     remaining: Duration,
     resumed_at: Option<Duration>,
     typing_started: Option<Duration>,
@@ -127,6 +128,7 @@ impl Activity {
             editor: Editor::default(),
             error: None,
             editing: false,
+            mapped: false,
             remaining: duration,
             resumed_at: None,
             typing_started: None,
@@ -135,7 +137,10 @@ impl Activity {
         }
     }
     pub fn mapped(&mut self, now: Duration) {
-        self.resumed_at.get_or_insert(now);
+        if !self.mapped {
+            self.resumed_at = Some(now);
+            self.mapped = true;
+        }
     }
     pub fn editing(&self) -> bool {
         self.editing
@@ -309,6 +314,23 @@ mod tests {
         assert_eq!(a.expired(at(132)), Some(Expiry::Typing));
         assert!(!a.insert("after deadline", at(132)));
     }
+    #[test]
+    fn repeated_mapping_cannot_resume_typing_or_round_off_remaining_time() {
+        let mut a = activity();
+        let started = Duration::from_millis(12_250);
+        a.insert("Reading", started);
+        a.mapped(at(20));
+        assert_eq!(a.remaining(at(30)), Duration::from_millis(2750));
+        assert_eq!(a.expired(at(30)), None);
+        let (id, _) = a.submission().unwrap();
+        a.saved(id, Duration::from_millis(42_500));
+        assert_eq!(a.expired(Duration::from_millis(45_249)), None);
+        assert_eq!(
+            a.expired(Duration::from_millis(45_250)),
+            Some(Expiry::Normal)
+        );
+    }
+
     #[test]
     fn utf8_editing_selection_and_bounds() {
         let mut e = Editor::default();
