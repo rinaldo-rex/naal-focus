@@ -1,8 +1,9 @@
-//! Private, append-only activity history. Only explicitly submitted text is stored.
+//! Private activity history with idempotent appends and atomic corrections.
 use serde::{Deserialize, Serialize};
 use std::{
+    ffi::{CStr, CString},
     fs::{self, DirBuilder, File, OpenOptions},
-    io::{Read, Seek, SeekFrom, Write},
+    io::{BufRead, BufReader, Read, Seek, SeekFrom, Write},
     os::{
         fd::{AsRawFd, FromRawFd},
         unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt},
@@ -13,11 +14,15 @@ use std::{
 };
 
 pub const MAX_ACTIVITY_CHARS: usize = 2000;
+const MAX_RECORD_BYTES: u64 = 16 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Entry {
     pub version: u32,
+    /// Opaque identity; default preserves compatibility with pre-ID records.
+    #[serde(default)]
+    pub id: String,
     /// UTC milliseconds since the Unix epoch, captured on submission.
     pub timestamp_unix_ms: u64,
     pub text: String,
@@ -34,10 +39,25 @@ impl Entry {
             .map_err(|_| "System timestamp is out of range.")?;
         Ok(Self {
             version: 1,
+            id: random_id()?,
             timestamp_unix_ms,
             text: text.to_owned(),
         })
     }
+    pub fn corrected(&self, text: &str) -> Result<Self, String> {
+        validate_text(text)?;
+        Ok(Self {
+            text: text.to_owned(),
+            ..self.clone()
+        })
+    }
+}
+fn random_id() -> Result<String, String> {
+    let mut bytes = [0; 16];
+    File::open("/dev/urandom")
+        .and_then(|mut file| file.read_exact(&mut bytes))
+        .map_err(|_| "Cannot generate an activity identity.")?;
+    Ok(bytes.into_iter().map(|b| format!("{b:02x}")).collect())
 }
 
 pub fn validate_text(text: &str) -> Result<(), String> {
@@ -71,6 +91,12 @@ pub struct PendingSave {
 impl PendingSave {
     pub fn start(entry: Entry) -> Result<Self, String> {
         Self::start_with(entry, |entry| save(&entry))
+    }
+    pub fn start_correction(original: Entry, entry: Entry) -> Result<Self, String> {
+        Self::start_with(entry, move |entry| {
+            persist_in(&directory()?, Some(&original), &entry)
+                .map_err(|e| format!("Activity correction failed: {e}"))
+        })
     }
     fn start_with(
         entry: Entry,
@@ -112,17 +138,28 @@ pub fn save(entry: &Entry) -> Result<(), String> {
 /// The caller must run this on a worker: filesystem I/O can stall independently
 /// of the overlay, whose parent watchdog must remain active.
 fn append_in(directory: &Path, entry: &Entry) -> Result<(), String> {
+    persist_in(directory, None, entry)
+}
+fn persist_in(directory: &Path, original: Option<&Entry>, entry: &Entry) -> Result<(), String> {
     validate_text(&entry.text)?;
+    if entry.id.len() != 32 || !entry.id.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err("Invalid activity identity.".into());
+    }
+    if original
+        .is_some_and(|old| old.id != entry.id || old.timestamp_unix_ms != entry.timestamp_unix_ms)
+    {
+        return Err("Corrections must preserve the original identity and timestamp.".into());
+    }
     if entry.version != 1 {
         return Err("Unsupported activity log version.".into());
     }
     let mut bytes = serde_json::to_vec(entry).map_err(|e| e.to_string())?;
     bytes.push(b'\n');
-    let created = match DirBuilder::new().mode(0o700).create(directory) {
-        Ok(()) => true,
-        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => false,
+    match DirBuilder::new().mode(0o700).create(directory) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
         Err(e) => return Err(e.to_string()),
-    };
+    }
     // Open the directory itself without following a symlink, then use openat
     // so a renamed/replaced path cannot redirect this save elsewhere.
     let dir = OpenOptions::new()
@@ -133,26 +170,13 @@ fn append_in(directory: &Path, entry: &Entry) -> Result<(), String> {
     check_owner(&dir)?;
     dir.set_permissions(fs::Permissions::from_mode(0o700))
         .map_err(|e| e.to_string())?;
-    // SAFETY: dir is live, the filename is NUL-terminated, and mode is supplied
-    // because O_CREAT is set. Ownership of the returned fd is transferred once.
-    let fd = unsafe {
-        libc::openat(
-            dir.as_raw_fd(),
-            c"activity.jsonl".as_ptr(),
-            libc::O_RDWR
-                | libc::O_CREAT
-                | libc::O_APPEND
-                | libc::O_NOFOLLOW
-                | libc::O_CLOEXEC
-                | libc::O_NONBLOCK,
-            0o600,
-        )
-    };
-    if fd < 0 {
-        return Err(std::io::Error::last_os_error().to_string());
-    }
-    // SAFETY: openat returned a new owned descriptor.
-    let mut file = unsafe { File::from_raw_fd(fd) };
+    // The directory lock remains stable when corrections replace activity.jsonl.
+    lock(&dir)?;
+    let mut file = open_at(
+        &dir,
+        c"activity.jsonl",
+        libc::O_RDWR | libc::O_CREAT | libc::O_APPEND,
+    )?;
     let metadata = file.metadata().map_err(|e| e.to_string())?;
     check_owner(&file)?;
     if !metadata.is_file() || metadata.nlink() != 1 {
@@ -160,34 +184,130 @@ fn append_in(directory: &Path, entry: &Entry) -> Result<(), String> {
     }
     file.set_permissions(fs::Permissions::from_mode(0o600))
         .map_err(|e| e.to_string())?;
-    // SAFETY: file is live; flock has no pointer arguments.
+    lock(&file)?;
+    let original_len = file.metadata().map_err(|e| e.to_string())?.len();
+    let mut found = None;
+    file.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;
+    let mut reader = BufReader::new(&mut file);
+    while let Some((_, record)) = read_record(&mut reader)? {
+        if record.id == entry.id {
+            if found.is_some() {
+                return Err("Duplicate activity identity; repair history before saving.".into());
+            }
+            found = Some(record);
+        }
+    }
+    // Persist directory creation even on retries after a previous sync failure.
+    File::open(
+        directory
+            .parent()
+            .ok_or("Missing activity directory parent.")?,
+    )
+    .and_then(|parent| parent.sync_all())
+    .map_err(|e| e.to_string())?;
+    dir.sync_all().map_err(|e| e.to_string())?;
+    if found.as_ref() == Some(entry) {
+        // Retry after an uncertain acknowledgment never creates another record.
+        return file.sync_all().map_err(|e| e.to_string());
+    }
+    match original {
+        None if found.is_none() => {
+            append_transaction(&mut file, original_len, |file| file.write_all(&bytes))
+        }
+        Some(original) if found.as_ref() == Some(original) => {
+            replace_record(&dir, &mut file, entry, &bytes)
+        }
+        _ => Err("Activity entry changed or disappeared; existing history was preserved.".into()),
+    }
+}
+
+fn lock(file: &File) -> Result<(), String> {
+    // SAFETY: a live descriptor; flock has no pointer arguments. Linux supports
+    // advisory locks on directory descriptors as well as regular files.
     if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
         return Err("Activity history is busy; try again.".into());
     }
-    let original_len = file.metadata().map_err(|e| e.to_string())?.len();
-    if original_len > 0 {
-        file.seek(SeekFrom::End(-1)).map_err(|e| e.to_string())?;
-        let mut tail = [0];
-        file.read_exact(&mut tail).map_err(|e| e.to_string())?;
-        if tail != [b'\n'] {
-            return Err("Activity history has an incomplete last record; repair it before retrying. Existing data was preserved.".into());
+    Ok(())
+}
+fn open_at(dir: &File, name: &CStr, flags: libc::c_int) -> Result<File, String> {
+    // SAFETY: live directory and NUL-terminated name; mode accompanies O_CREAT.
+    let fd = unsafe {
+        libc::openat(
+            dir.as_raw_fd(),
+            name.as_ptr(),
+            flags | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK,
+            0o600,
+        )
+    };
+    if fd < 0 {
+        return Err(std::io::Error::last_os_error().to_string());
+    }
+    // SAFETY: the newly owned descriptor is transferred exactly once.
+    Ok(unsafe { File::from_raw_fd(fd) })
+}
+fn read_record(reader: &mut impl BufRead) -> Result<Option<(Vec<u8>, Entry)>, String> {
+    let mut line = Vec::new();
+    let bytes = reader
+        .take(MAX_RECORD_BYTES + 1)
+        .read_until(b'\n', &mut line)
+        .map_err(|e| e.to_string())?;
+    if bytes == 0 {
+        return Ok(None);
+    }
+    if bytes as u64 > MAX_RECORD_BYTES || line.last() != Some(&b'\n') {
+        return Err("Activity history has an incomplete or oversized record; repair it before retrying. Existing data was preserved.".into());
+    }
+    let record: Entry = serde_json::from_slice(&line)
+        .map_err(|_| "Activity history has a malformed record; repair it before retrying.")?;
+    validate_text(&record.text)?;
+    if record.version != 1 {
+        return Err("Unsupported activity history version.".into());
+    }
+    Ok(Some((line, record)))
+}
+struct Scratch<'a> {
+    dir: &'a File,
+    name: CString,
+}
+impl Drop for Scratch<'_> {
+    fn drop(&mut self) {
+        // SAFETY: live directory and NUL-terminated, private temporary filename.
+        unsafe {
+            libc::unlinkat(self.dir.as_raw_fd(), self.name.as_ptr(), 0);
         }
     }
-    // Sync the directory entry before committing a record; acknowledgment comes
-    // only after the entire appended line has been synced. A reported append
-    // failure rolls back our own bytes under the lock, never previous records.
-    dir.sync_all().map_err(|e| e.to_string())?;
-    if created {
-        // Also persist the new .naal-focus entry in HOME before acknowledging.
-        File::open(
-            directory
-                .parent()
-                .ok_or("Missing activity directory parent.")?,
-        )
-        .and_then(|parent| parent.sync_all())
-        .map_err(|e| e.to_string())?;
+}
+fn replace_record(dir: &File, file: &mut File, entry: &Entry, bytes: &[u8]) -> Result<(), String> {
+    let scratch = Scratch {
+        dir,
+        name: CString::new(format!(".activity-{}.tmp", random_id()?)).map_err(|e| e.to_string())?,
+    };
+    let mut output = open_at(
+        dir,
+        &scratch.name,
+        libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL,
+    )?;
+    file.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;
+    let mut reader = BufReader::new(file);
+    while let Some((line, record)) = read_record(&mut reader)? {
+        output
+            .write_all(if record.id == entry.id { bytes } else { &line })
+            .map_err(|e| e.to_string())?;
     }
-    append_transaction(&mut file, original_len, |file| file.write_all(&bytes))
+    output.sync_all().map_err(|e| e.to_string())?;
+    // SAFETY: live directory and two NUL-terminated paths on the same filesystem.
+    if unsafe {
+        libc::renameat(
+            dir.as_raw_fd(),
+            scratch.name.as_ptr(),
+            dir.as_raw_fd(),
+            c"activity.jsonl".as_ptr(),
+        )
+    } != 0
+    {
+        return Err(std::io::Error::last_os_error().to_string());
+    }
+    dir.sync_all().map_err(|e| e.to_string())
 }
 
 fn append_transaction(
@@ -242,6 +362,12 @@ mod tests {
     fn entry(text: &str) -> Entry {
         Entry {
             version: 1,
+            id: {
+                use std::hash::{Hash, Hasher};
+                let mut hash = std::collections::hash_map::DefaultHasher::new();
+                text.hash(&mut hash);
+                format!("{:032x}", hash.finish())
+            },
             timestamp_unix_ms: 1234,
             text: text.into(),
         }
@@ -281,6 +407,103 @@ mod tests {
             records,
             [entry("Reading \"Rust\" 🪷"), entry("Taking a break")]
         );
+    }
+
+    #[test]
+    fn corrections_are_atomic_idempotent_and_keep_original_timestamp() {
+        let temp = Temp::new();
+        let first = entry("Reading docs");
+        let other = entry("Taking a break");
+        append_in(&temp.0, &first).unwrap();
+        append_in(&temp.0, &other).unwrap();
+        append_in(&temp.0, &first).unwrap(); // uncertain-ack retry: not another entry
+        let corrected = first.corrected("Reviewing Rust documentation").unwrap();
+        persist_in(&temp.0, Some(&first), &corrected).unwrap();
+        persist_in(&temp.0, Some(&first), &corrected).unwrap(); // correction retry
+        let records: Vec<Entry> = fs::read_to_string(temp.0.join("activity.jsonl"))
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(records, [corrected.clone(), other]);
+        assert_eq!(corrected.id, first.id);
+        assert_eq!(corrected.timestamp_unix_ms, first.timestamp_unix_ms);
+        assert_eq!(
+            fs::metadata(temp.0.join("activity.jsonl"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+        assert_eq!(fs::read_dir(&temp.0).unwrap().count(), 1); // no abandoned temporary file
+    }
+
+    #[test]
+    fn correction_conflicts_and_directory_lock_preserve_history() {
+        let temp = Temp::new();
+        let original = entry("Reading");
+        append_in(&temp.0, &original).unwrap();
+        let updated = original.corrected("Coding").unwrap();
+        persist_in(&temp.0, Some(&original), &updated).unwrap();
+        let path = temp.0.join("activity.jsonl");
+        let before = fs::read(&path).unwrap();
+        assert!(
+            persist_in(
+                &temp.0,
+                Some(&original),
+                &original.corrected("Stale edit").unwrap()
+            )
+            .is_err()
+        );
+        assert_eq!(fs::read(&path).unwrap(), before);
+        let dir_lock = File::open(&temp.0).unwrap();
+        lock(&dir_lock).unwrap();
+        assert!(append_in(&temp.0, &entry("New")).is_err());
+        assert!(
+            persist_in(
+                &temp.0,
+                Some(&updated),
+                &updated.corrected("Again").unwrap()
+            )
+            .is_err()
+        );
+        assert_eq!(fs::read(&path).unwrap(), before);
+    }
+
+    #[test]
+    fn legacy_records_survive_corrections_and_malformed_history_is_preserved() {
+        let temp = Temp::new();
+        let original = entry("Reading");
+        append_in(&temp.0, &original).unwrap();
+        let path = temp.0.join("activity.jsonl");
+        let legacy = b"{\"version\":1,\"timestamp_unix_ms\":10,\"text\":\"Legacy\"}\n";
+        OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap()
+            .write_all(legacy)
+            .unwrap();
+        let updated = original.corrected("Coding").unwrap();
+        persist_in(&temp.0, Some(&original), &updated).unwrap();
+        assert!(fs::read(&path).unwrap().ends_with(legacy));
+        OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap()
+            .write_all(b"malformed\n")
+            .unwrap();
+        let before = fs::read(&path).unwrap();
+        assert!(append_in(&temp.0, &entry("New")).is_err());
+        assert!(
+            persist_in(
+                &temp.0,
+                Some(&updated),
+                &updated.corrected("Again").unwrap()
+            )
+            .is_err()
+        );
+        assert_eq!(fs::read(&path).unwrap(), before);
     }
 
     #[test]
