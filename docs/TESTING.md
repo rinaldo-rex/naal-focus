@@ -83,7 +83,26 @@ In the final live test (`--delay-secs 15 --duration-secs 15 --typing-limit-secs 
 - The helper dismissed both surfaces with reason `timeout` and exit status 0 after 41 seconds including the initial delay; it did not terminate through the typing-limit deadline.
 - The user confirmed that typing was now responsive and the visible interaction worked as intended. A shortcut-specific Ctrl+A check was declined; no native shortcut acceptance is claimed.
 
-**Still unverified live in this pass:** draft Escape/background cancellation, no-input dismissal on the final build, typing-limit expiry with an unfinished draft, actual save failures, live settings-popup editing, long-writing recurring reminders, lock/idle/suspend/hotplug transitions, and stopped-helper/parent-death scenarios. Automated coverage is not substituted for these checks.
+**Still unverified live after this pass:** actual save failures, live settings-popup editing, long-writing recurring reminders, lock/idle/suspend/hotplug transitions, and parent-death signaling. Automated coverage is not substituted for these checks.
+
+### Live cancellation, deadline, and watchdog regression
+
+Checked on **2026-10-06**. One-shot runs used the debug build at `5df4b3ea` (activity-logging feature code `b8eea096`) on COSMIC Wayland with outputs `DP-1` (1920×1080, scale 1), `eDP-1` (1707×960 logical, scale 2), and `HDMI-A-1` (1920×1080, scale 1). Temporary `HOME` directories kept real activity history untouched. Real reminders were paused during the session and re-enabled afterward.
+
+| Check | Result |
+|---|---|
+| Escape while writing | Draft discarded, remaining countdown resumed to a `timeout` dismissal; no record. |
+| Background click-release while writing | Same as Escape: draft discarded, countdown resumed, no record. The user confirmed the click did not reach the application underneath. |
+| No-input dismissal (final build) | Untouched overlay dismissed `timeout` after the normal duration; no record, no input-strip redraw. |
+| Escape with no draft | Immediate dismissal (`escape`); no record. |
+| Cancel/reopen draft handling | A second draft after a cancel cycle was still discarded — not dismissed — on Escape; the countdown resumed to a `timeout` dismissal. |
+| Typing-limit expiry | With a 30s limit and a cancel/reopen attempt partway through, dismissal reason was `typing-limit` at first input + 30s; cancel/reopen did not renew the deadline and the unfinished draft was not saved. |
+| Shared-monitor input | The user confirmed typed text and the underline progress bar appeared simultaneously on all three outputs. |
+| Stalled-helper watchdog | A supervised helper (spawned by the installed applet via Show now; real settings: duration 10s, typing limit 120s) was frozen with SIGSTOP ~0.03s after detection. It remained in state `T` and was killed at the designed 138s helper-lifetime budget (`duration + typing limit + 8`). A stopped process cannot exit on its own, so the kill came from the parent watchdog. No leftover helper; the applet processes stayed healthy. This exercised the installed release build `552ef9a7`; the watchdog code (`engine.rs`, `config.rs`, `process.rs`) is unchanged through `5df4b3ea`. |
+
+Observation: a scheduled real reminder collided with one one-shot run; the singleton guard refused the second overlay (`Another Naal Focus overlay is already running`, exit 1) instead of stacking another focus-capturing surface.
+
+**Still unverified live in this pass:** actual save failures, live settings-popup editing, long-writing recurring reminders, lock/idle/suspend/hotplug transitions, and parent-death signaling. Long-writing recurrence and guard cancellations remain established by automated tests only.
 
 ## Manual acceptance checks
 
