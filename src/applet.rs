@@ -13,7 +13,7 @@ use cosmic::{
     prelude::*,
     widget,
 };
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 mod launch;
 mod settings;
@@ -42,6 +42,7 @@ pub struct App {
     engine: Engine,
     status: Status,
     form: SettingsForm,
+    saved_at: Option<Instant>,
 }
 
 #[derive(Debug, Clone)]
@@ -65,6 +66,7 @@ pub enum Message {
     IdleSecs(String),
     Quotes(widget::text_editor::Action),
     Save,
+    WindowFocus { id: Id, focused: bool },
     Surface(cosmic::surface::Action<Message>),
 }
 
@@ -102,40 +104,49 @@ impl App {
     fn settings_view(&self) -> Element<'_, Message> {
         let timing = widget::settings::section()
             .title("Timing")
-            .add(widget::settings::item(
+            .add(numeric_field(
                 "Interval (seconds)",
-                widget::text_input("300", &self.form.interval)
-                    .on_input(Message::Interval)
-                    .width(100),
+                "300",
+                &self.form.interval,
+                15,
+                86_400,
+                Message::Interval,
             ))
-            .add(widget::settings::item(
+            .add(numeric_field(
                 "Duration (1–30 seconds)",
-                widget::text_input("5", &self.form.duration)
-                    .on_input(Message::Duration)
-                    .width(100),
+                "5",
+                &self.form.duration,
+                1,
+                30,
+                Message::Duration,
             ))
-            .add(widget::settings::item(
+            .add(numeric_field(
                 "Skip after idle (seconds)",
-                widget::text_input("120", &self.form.idle_secs)
-                    .on_input(Message::IdleSecs)
-                    .width(100),
+                "120",
+                &self.form.idle_secs,
+                30,
+                3_600,
+                Message::IdleSecs,
             ));
-        let appearance =
-            widget::settings::section()
-                .title("Appearance")
-                .add(widget::settings::item(
-                    "Text size (22–72 px)",
-                    widget::text_input("36", &self.form.text_size)
-                        .on_input(Message::TextSize)
-                        .width(100),
-                ));
+        let appearance = widget::settings::section()
+            .title("Appearance")
+            .add(numeric_field(
+                "Text size (22–72 px)",
+                "36",
+                &self.form.text_size,
+                22,
+                72,
+                Message::TextSize,
+            ));
         let reflection = widget::settings::section()
             .title("Reflection")
-            .add(widget::settings::item(
+            .add(numeric_field(
                 "Typing time limit (30–600 seconds)",
-                widget::text_input("120", &self.form.typing_limit)
-                    .on_input(Message::TypingLimit)
-                    .width(100),
+                "120",
+                &self.form.typing_limit,
+                30,
+                600,
+                Message::TypingLimit,
             ))
             .add(
                 widget::column([])
@@ -149,8 +160,9 @@ impl App {
                     )
                     .push(widget::text("1–100 quotes, up to 500 characters each. Rotate in order.").size(12)),
             );
-        let mut content = widget::column([])
-            .spacing(20)
+        let mut content = widget::column([]).spacing(20);
+        content = content.push_maybe(self.saved_at.is_some().then(save_banner));
+        content = content
             .push(widget::text(&self.status.message))
             .push(timing)
             .push(appearance)
@@ -175,8 +187,74 @@ impl App {
     }
 
     fn sync_status(&mut self, status: Status) {
-        self.form.sync(&status.settings, status.error.as_deref());
+        if self.form.sync(&status.settings, status.error.as_deref()) {
+            self.saved_at = Some(Instant::now());
+        }
         self.status = status;
+    }
+}
+
+/// A validated numeric field rendered web-form style: the error lives
+/// directly under the input, not only at the bottom of the window.
+fn numeric_field<'a>(
+    title: &'a str,
+    placeholder: &'a str,
+    value: &'a str,
+    min: u64,
+    max: u64,
+    message: fn(String) -> Message,
+) -> Element<'a, Message> {
+    let mut control = widget::column![].push(
+        widget::text_input(placeholder, value)
+            .on_input(message)
+            .on_submit(|_| Message::Save)
+            .width(100),
+    );
+    if let Some(problem) = settings::numeric_field_error(value, min, max) {
+        control = control.push(
+            widget::text(problem)
+                .size(11)
+                .class(cosmic::theme::Text::Custom(error_text_style)),
+        );
+    }
+    widget::settings::item(title, control).into()
+}
+
+fn error_text_style(theme: &cosmic::Theme) -> cosmic::iced::widget::text::Style {
+    cosmic::iced::widget::text::Style {
+        color: Some(theme.cosmic().destructive_text_color().into()),
+        selected_fill: theme.cosmic().accent.base.into(),
+        selected_text_color: Some(theme.cosmic().on_accent_color().into()),
+    }
+}
+
+const SAVE_BANNER_SECS: u64 = 6;
+
+fn save_banner<'a>() -> Element<'a, Message> {
+    widget::container(
+        widget::row![]
+            .push(widget::text("✓").size(14))
+            .push(widget::text("Settings saved"))
+            .spacing(8),
+    )
+    .class(cosmic::theme::Container::custom(success_banner_style))
+    .padding([8, 14])
+    .width(iced::Length::Fill)
+    .into()
+}
+
+fn success_banner_style(theme: &cosmic::Theme) -> cosmic::iced::widget::container::Style {
+    cosmic::iced::widget::container::Style {
+        background: Some(cosmic::iced::Background::Color(
+            theme.cosmic().success.base.into(),
+        )),
+        text_color: Some(theme.cosmic().success.on.into()),
+        icon_color: Some(theme.cosmic().success.on.into()),
+        border: cosmic::iced::Border {
+            radius: theme.cosmic().corner_radii.radius_s.into(),
+            ..Default::default()
+        },
+        ..Default::default()
     }
 }
 
@@ -216,6 +294,7 @@ impl cosmic::Application for App {
             status: engine.status(),
             engine,
             form: SettingsForm::new(&settings),
+            saved_at: None,
         };
         let task = if app.standalone {
             app.set_header_title("Naal Focus Settings".into());
@@ -277,6 +356,10 @@ impl cosmic::Application for App {
             Subscription::batch([
                 tick,
                 iced::window::open_events().map(Message::SettingsOpened),
+                iced::window::events().map(|(id, event)| Message::WindowFocus {
+                    id,
+                    focused: matches!(event, iced::window::Event::Focused),
+                }),
             ])
         } else {
             Subscription::batch([
@@ -287,7 +370,14 @@ impl cosmic::Application for App {
     }
     fn update(&mut self, message: Message) -> Task<cosmic::Action<Message>> {
         match message {
-            Message::Tick => self.sync_status(self.engine.status()),
+            Message::Tick => {
+                if let Some(at) = self.saved_at
+                    && at.elapsed().as_secs() >= SAVE_BANNER_SECS
+                {
+                    self.saved_at = None;
+                }
+                self.sync_status(self.engine.status());
+            }
             Message::OpenSettings => {
                 if self.opening_settings {
                     return Task::none();
@@ -348,6 +438,19 @@ impl cosmic::Application for App {
                     && let Some(token) = self.startup_token.take()
                 {
                     return activation::activate(id, token);
+                }
+            }
+            Message::WindowFocus { id, focused } => {
+                // Leaving the settings window is the commit point for drafting:
+                // an entirely valid draft saves itself here; an invalid draft
+                // stays queued for the next visit with its inline errors.
+                if self.standalone
+                    && !focused
+                    && self.core.main_window_id() == Some(id)
+                    && self.form.dirty
+                    && let Ok(settings) = self.form.save(&self.status.settings)
+                {
+                    self.engine.request(Request::Settings(settings));
                 }
             }
             Message::Enabled(enabled) => {

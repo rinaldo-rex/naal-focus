@@ -2,6 +2,16 @@
 use crate::config::{self, Settings};
 use cosmic::widget;
 
+/// Live per-field message for one numeric settings input, matching the
+/// ranges enforced by [`Settings::validate`]. `None` means the draft value
+/// can be saved.
+pub fn numeric_field_error(value: &str, min: u64, max: u64) -> Option<String> {
+    match value.trim().parse::<u64>() {
+        Ok(number) if (min..=max).contains(&number) => None,
+        _ => Some(format!("Must be a whole number from {min} to {max}.")),
+    }
+}
+
 pub(super) struct SettingsForm {
     pub interval: String,
     pub duration: String,
@@ -31,11 +41,12 @@ impl SettingsForm {
         }
     }
 
-    pub fn sync(&mut self, settings: &Settings, error: Option<&str>) {
+    pub fn sync(&mut self, settings: &Settings, error: Option<&str>) -> bool {
         if self.pending_save.as_ref() == Some(settings) && error.is_none() {
             self.pending_save = None;
             // Typing after Save must not be erased by its later acknowledgment.
             self.dirty = self.candidate(settings).as_ref().ok() != Some(settings);
+            return true;
         }
         if !self.dirty {
             // Avoid rebuilding the editor and losing its cursor on every tick.
@@ -43,6 +54,7 @@ impl SettingsForm {
                 *self = Self::new(settings);
             }
         }
+        false
     }
 
     pub fn save(&mut self, settings: &Settings) -> Result<Settings, String> {
@@ -95,6 +107,30 @@ impl SettingsForm {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn numeric_field_error_reports_unsaveable_values_only() {
+        assert!(numeric_field_error("600", 15, 86_400).is_none());
+        assert_eq!(
+            numeric_field_error("5", 15, 86_400).as_deref(),
+            Some("Must be a whole number from 15 to 86400.")
+        );
+        assert!(numeric_field_error("86401", 15, 86_400).is_some());
+        assert!(numeric_field_error("", 15, 86_400).is_some());
+        assert!(numeric_field_error("abc", 15, 86_400).is_some());
+        assert!(numeric_field_error("1.5", 15, 86_400).is_some());
+        assert!(numeric_field_error("-1", 15, 86_400).is_some());
+    }
+
+    #[test]
+    fn sync_reports_when_a_save_is_acknowledged() {
+        let mut form = SettingsForm::new(&Settings::default());
+        form.interval = "600".into();
+        let saved = form.save(&Settings::default()).unwrap();
+        assert!(!form.sync(&Settings::default(), None));
+        assert!(form.sync(&saved, None));
+        assert!(form.pending_save.is_none());
+    }
 
     #[test]
     fn clean_form_tracks_shared_settings_but_dirty_draft_is_preserved() {
