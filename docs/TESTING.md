@@ -39,7 +39,7 @@ cargo test --locked
 | Process lifetime | Monotonic boot clock, singleton exclusion/release, child kill-and-reap on drop | Stalled renderer watchdog and parent-death signaling under live overlays |
 | Overlay input and rendering | CLI/stdin limits, parent/helper budget propagation, multiline layout, wrapping, premultiplied pixels, input hit-testing/scale/scroll, progress pixels, cached-background preservation across saved/editing transitions | Wayland surface lifecycle, visible readability, keyboard suppression, dismissal, focus restoration, output hotplug |
 | Native applet helpers | Multiline editor content, Snooze/Resume selection, desktop launch environment, settings validation, clean/dirty synchronization, failed-save and post-save draft retention | Dock/panel popup layout, unsaved-edit synchronization across visible windows |
-| Settings-window process | Concurrent startup exclusion, existing-process activation, window-lock release/relaunch, supervisor survival after settings-process termination | Visible layout, click-outside persistence, host activation-token focus/raise, header-bar close, real field/button interactions |
+| Settings-window process | Concurrent startup exclusion, existing-process activation, window-lock release/relaunch, supervisor survival after settings-process termination | Unsaved-edit synchronization across visible windows; the rest (visible layout, click-outside persistence, header-bar close, real field/button interactions) was live-accepted at the panel on 2026-10-06 |
 | Shared supervisor | Three clients share settings/snooze, corrupt-file repair, lock-overlap retry, secondary shutdown, owner takeover, snooze retention | Cross-process crash scenarios, live helper cancellation during takeover |
 
 ## Latest recorded verification
@@ -55,7 +55,22 @@ Checked on **2026-10-04** at `552ef9a7` (feature code: `0749de2a`):
 
 No installation or changes to real reminder preferences were made. The first native settings test passed its assertions but auto-started desktop portals whose temporary mounts interfered with cleanup; the harness was changed to disable service auto-start, and the complete command then passed cleanly.
 
-**Still awaiting manual acceptance for #3:** compact popup layout; grouped settings readability and resizing; Settings… from the actual panel opening/raising an existing (including minimized) window; click-outside persistence; header-bar closing; visible validation/save feedback and draft preservation. Process activation success does not prove that the compositor focused or raised the window.
+**Still awaiting manual acceptance was resolved on 2026-10-06** — see the live acceptance below; note that process activation alone still does not prove compositor focus or raise behavior, which is why this pass was manual.
+
+### Settings-window live acceptance
+
+**Accepted at the real panel on 2026-10-06** (installed build `552ef9a7`, whose #3 feature code is identical to current main):
+
+- The popup shows only status, the reminders toggle, Show now, Snooze/Resume, and Settings….
+- Settings… opens the grouped window from the panel; with the window minimized, reopening raised the same window instead of creating a duplicate.
+- Clicking outside keeps the window open; closing via the header bar left the applet processes and scheduling running (verified from the process list and settings file during the session).
+- The window resizes with its groups remaining readable.
+
+The live review surfaced two feedback lessons, implemented the same day and re-validated on the debug build at the polish revision:
+
+- Invalid numeric input renders its range message directly under the affected field in the destructive theme color, while typing.
+- A successful save shows a prominent "✓ Settings saved" banner at the top of the window, auto-clearing after some seconds.
+- Enter in a numeric field saves; leaving the settings window auto-saves a wholly valid draft (observed live: a changed interval reached the settings file without pressing Save). An invalid draft, e.g. an interval of 5, saves nothing, keeps its values, and keeps its inline errors.
 
 ### Activity-logging verification
 
