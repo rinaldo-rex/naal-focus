@@ -1,0 +1,5 @@
+{
+  "packages": [
+    "git:github.com/rinaldo-rex/pi-ask-better"
+  ]
+}
