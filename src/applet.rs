@@ -1,5 +1,6 @@
 use crate::{
     config::{self, Settings},
+    dashboard::PendingOpen,
     engine::{Engine, Request, Status},
 };
 use cosmic::iced::platform_specific::shell::wayland::commands::{
@@ -38,6 +39,8 @@ pub struct App {
     startup_token: Option<String>,
     token_tx: Option<calloop::channel::Sender<TokenRequest>>,
     opening_settings: bool,
+    opening_dashboard: bool,
+    pending_dashboard: Option<PendingOpen>,
     launch_error: Option<String>,
     engine: Engine,
     status: Status,
@@ -49,6 +52,8 @@ pub struct App {
 pub enum Message {
     TogglePopup,
     OpenSettings,
+    OpenDashboard,
+    DashboardOpened(Result<(), String>),
     Token(TokenUpdate),
     SettingsToken(Option<String>),
     SettingsLaunched(Result<(), String>),
@@ -90,8 +95,17 @@ impl App {
                     .push(widget::button::standard(secondary_label).on_press(secondary_action)),
             );
         content = content.push(widget::divider::horizontal::default()).push(
-            widget::button::text("Settings…")
-                .on_press_maybe((!self.opening_settings).then_some(Message::OpenSettings)),
+            widget::column![]
+                .spacing(4)
+                .push(
+                    widget::button::text("Dashboard…").on_press_maybe(
+                        (!self.opening_dashboard).then_some(Message::OpenDashboard),
+                    ),
+                )
+                .push(
+                    widget::button::text("Settings…")
+                        .on_press_maybe((!self.opening_settings).then_some(Message::OpenSettings)),
+                ),
         );
         if let Some(error) = self.launch_error.as_ref().or(self.status.error.as_ref()) {
             content = content.push(widget::text(format!("⚠ {error}")).size(13));
@@ -290,6 +304,8 @@ impl cosmic::Application for App {
                 .flatten(),
             token_tx: None,
             opening_settings: false,
+            opening_dashboard: false,
+            pending_dashboard: None,
             launch_error: None,
             status: engine.status(),
             engine,
@@ -377,6 +393,11 @@ impl cosmic::Application for App {
                     self.saved_at = None;
                 }
                 self.sync_status(self.engine.status());
+                // Generation and opening run on the dashboard worker; this
+                // loop only polls its result without ever blocking on I/O.
+                if let Some(result) = self.pending_dashboard.as_mut().and_then(|p| p.poll()) {
+                    return self.update(Message::DashboardOpened(result));
+                }
             }
             Message::OpenSettings => {
                 if self.opening_settings {
@@ -425,6 +446,33 @@ impl cosmic::Application for App {
             Message::SettingsLaunched(result) => {
                 self.opening_settings = false;
                 match result {
+                    Ok(()) => {
+                        if let Some(popup) = self.popup.take() {
+                            return destroy_popup(popup);
+                        }
+                    }
+                    Err(error) => self.launch_error = Some(error),
+                }
+            }
+            Message::OpenDashboard => {
+                if self.opening_dashboard {
+                    return Task::none();
+                }
+                match PendingOpen::start() {
+                    Ok(pending) => {
+                        self.pending_dashboard = Some(pending);
+                        self.opening_dashboard = true;
+                        self.launch_error = None;
+                    }
+                    Err(error) => self.launch_error = Some(error),
+                }
+            }
+            Message::DashboardOpened(result) => {
+                self.opening_dashboard = false;
+                self.pending_dashboard = None;
+                match result {
+                    // Rebuilt fresh on every open; a stale browser tab keeps
+                    // its old snapshot until the next open or a reload.
                     Ok(()) => {
                         if let Some(popup) = self.popup.take() {
                             return destroy_popup(popup);
