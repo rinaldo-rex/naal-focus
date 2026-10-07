@@ -1,6 +1,7 @@
 //! Private activity history with idempotent appends and atomic corrections.
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::HashSet,
     ffi::{CStr, CString},
     fs::{self, DirBuilder, File, OpenOptions},
     io::{BufRead, BufReader, Read, Seek, SeekFrom, Write},
@@ -155,28 +156,15 @@ fn persist_in(directory: &Path, original: Option<&Entry>, entry: &Entry) -> Resu
     }
     let mut bytes = serde_json::to_vec(entry).map_err(|e| e.to_string())?;
     bytes.push(b'\n');
-    match DirBuilder::new().mode(0o700).create(directory) {
-        Ok(()) => {}
-        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
-        Err(e) => return Err(e.to_string()),
-    }
-    // Open the directory itself without following a symlink, then use openat
-    // so a renamed/replaced path cannot redirect this save elsewhere.
-    let dir = OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
-        .open(directory)
-        .map_err(|e| e.to_string())?;
-    check_owner(&dir)?;
-    dir.set_permissions(fs::Permissions::from_mode(0o700))
-        .map_err(|e| e.to_string())?;
+    let dir = private_dir(directory)?;
     // The directory lock remains stable when corrections replace activity.jsonl.
     lock(&dir)?;
     let mut file = open_at(
         &dir,
         c"activity.jsonl",
         libc::O_RDWR | libc::O_CREAT | libc::O_APPEND,
-    )?;
+    )
+    .map_err(|e| e.to_string())?;
     let metadata = file.metadata().map_err(|e| e.to_string())?;
     check_owner(&file)?;
     if !metadata.is_file() || metadata.nlink() != 1 {
@@ -221,6 +209,96 @@ fn persist_in(directory: &Path, original: Option<&Entry>, entry: &Entry) -> Resu
     }
 }
 
+/// The private `~/.naal-focus/` directory with link and owner guards.
+/// Opening it follows neither symlinks nor renamed/replaced paths.
+fn private_dir(directory: &Path) -> Result<File, String> {
+    match DirBuilder::new().mode(0o700).create(directory) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(e) => return Err(e.to_string()),
+    }
+    // Open the directory itself without following a symlink, then use openat
+    // so a renamed/replaced path cannot redirect this save elsewhere.
+    let dir = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(directory)
+        .map_err(|e| e.to_string())?;
+    check_owner(&dir)?;
+    dir.set_permissions(fs::Permissions::from_mode(0o700))
+        .map_err(|e| e.to_string())?;
+    Ok(dir)
+}
+
+/// Lenient read-only history scan for read-only consumers such as the
+/// dashboard. Malformed, incomplete, oversized, duplicate, or blank lines
+/// are skipped individually and counted; valid entries still load. A missing
+/// directory or history is an empty history, not an error. Sharing the
+/// writer's lock keeps a partial append or correction out of a scan.
+pub fn load_lenient(directory: &Path) -> Result<(Vec<Entry>, usize), String> {
+    let dir = match OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(directory)
+    {
+        Ok(dir) => dir,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok((Vec::new(), 0)),
+        Err(e) => return Err(e.to_string()),
+    };
+    check_owner(&dir)?;
+    lock_shared(&dir)?;
+    let mut file = match open_at(&dir, c"activity.jsonl", libc::O_RDONLY) {
+        Ok(file) => file,
+        // A missing history is an empty history, not a read error.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok((Vec::new(), 0)),
+        Err(e) => return Err(format!("Activity history is unreadable: {e}")),
+    };
+    check_owner(&file)?;
+    if !file.metadata().map_err(|e| e.to_string())?.is_file() {
+        return Err("Activity history must be a regular file.".into());
+    }
+    lock_shared(&file)?;
+    file.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;
+    let mut entries = Vec::new();
+    let mut skipped = 0;
+    let mut seen = HashSet::new();
+    let mut inner = BufReader::new(&file);
+    let reader = &mut inner;
+    loop {
+        let mut line = Vec::new();
+        let bytes = reader
+            .take(MAX_RECORD_BYTES + 1)
+            .read_until(b'\n', &mut line)
+            .map_err(|e| e.to_string())?;
+        if bytes == 0 {
+            break;
+        }
+        if line.len() as u64 > MAX_RECORD_BYTES {
+            // Drain the rest of the oversized line without storing it.
+            let mut rest = Vec::new();
+            reader
+                .read_until(b'\n', &mut rest)
+                .map_err(|e| e.to_string())?;
+            skipped += 1;
+            continue;
+        }
+        if line.last() != Some(&b'\n') {
+            // Incomplete final record: it was never acknowledged as saved.
+            skipped += 1;
+            break;
+        }
+        let record: Option<Entry> = serde_json::from_slice(&line)
+            .ok()
+            .filter(|record: &Entry| record.version == 1 && validate_text(&record.text).is_ok());
+        match record {
+            Some(record) if record.id.is_empty() => entries.push(record),
+            Some(record) if seen.insert(record.id.clone()) => entries.push(record),
+            _ => skipped += 1,
+        }
+    }
+    Ok((entries, skipped))
+}
+
 fn lock(file: &File) -> Result<(), String> {
     // SAFETY: a live descriptor; flock has no pointer arguments. Linux supports
     // advisory locks on directory descriptors as well as regular files.
@@ -229,7 +307,15 @@ fn lock(file: &File) -> Result<(), String> {
     }
     Ok(())
 }
-fn open_at(dir: &File, name: &CStr, flags: libc::c_int) -> Result<File, String> {
+fn lock_shared(file: &File) -> Result<(), String> {
+    // SAFETY: a live descriptor; flock has no pointer arguments. Linux supports
+    // advisory locks on directory descriptors as well as regular files.
+    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_SH | libc::LOCK_NB) } != 0 {
+        return Err("Activity history is busy; try again.".into());
+    }
+    Ok(())
+}
+fn open_at(dir: &File, name: &CStr, flags: libc::c_int) -> Result<File, std::io::Error> {
     // SAFETY: live directory and NUL-terminated name; mode accompanies O_CREAT.
     let fd = unsafe {
         libc::openat(
@@ -240,7 +326,7 @@ fn open_at(dir: &File, name: &CStr, flags: libc::c_int) -> Result<File, String> 
         )
     };
     if fd < 0 {
-        return Err(std::io::Error::last_os_error().to_string());
+        return Err(std::io::Error::last_os_error());
     }
     // SAFETY: the newly owned descriptor is transferred exactly once.
     Ok(unsafe { File::from_raw_fd(fd) })
@@ -286,7 +372,8 @@ fn replace_record(dir: &File, file: &mut File, entry: &Entry, bytes: &[u8]) -> R
         dir,
         &scratch.name,
         libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL,
-    )?;
+    )
+    .map_err(|e| e.to_string())?;
     file.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;
     let mut reader = BufReader::new(file);
     while let Some((line, record)) = read_record(&mut reader)? {
@@ -584,6 +671,75 @@ mod tests {
         assert_eq!(fs::read(&path).unwrap(), before);
         append_in(&temp.0, &entry("Retry")).unwrap();
         assert_eq!(fs::read_to_string(&path).unwrap().lines().count(), 2);
+    }
+
+    #[test]
+    fn lenient_scan_skips_bad_lines_and_keeps_valid_entries() {
+        let temp = Temp::new();
+        let dir = temp.0.join("history");
+        fs::create_dir(&dir).unwrap();
+        let path = dir.join("activity.jsonl");
+        let legacy = br#"{"version":1,"timestamp_unix_ms":10,"text":"Legacy"}"#;
+        let good =
+            br#"{"version":1,"id":"0123456789abcdef0123456789abcdef","timestamp_unix_ms":20,"text":"Reading"}"#;
+        let mut file = fs::File::create(&path).unwrap();
+        for line in [legacy as &[u8], good, good] {
+            file.write_all(line).unwrap();
+            file.write_all(b"\n").unwrap();
+        }
+        file.write_all(b"malformed\n\n").unwrap();
+        file.write_all(b"{\"version\":2,\"timestamp_unix_ms\":1,\"text\":\"x\"}\n")
+            .unwrap();
+        file.write_all(b"{\"version\":1,\"timestamp_unix_ms\":3,\"text\":\"a\\nb\"}\n")
+            .unwrap();
+        let (entries, skipped) = load_lenient(&dir).unwrap();
+        let legacy_entry = Entry {
+            version: 1,
+            id: String::new(),
+            timestamp_unix_ms: 10,
+            text: "Legacy".into(),
+        };
+        let good_entry = Entry {
+            version: 1,
+            id: "0123456789abcdef0123456789abcdef".into(),
+            timestamp_unix_ms: 20,
+            text: "Reading".into(),
+        };
+        assert_eq!(
+            entries,
+            [legacy_entry, good_entry],
+            "duplicate, malformed, blank, version, and control-character lines are skipped"
+        );
+        assert_eq!(skipped, 5);
+        // A missing directory or history is simply empty, never an error.
+        assert_eq!(
+            load_lenient(&temp.0.join("absent")).unwrap(),
+            (Vec::new(), 0)
+        );
+        let empty = temp.0.join("empty");
+        fs::create_dir(&empty).unwrap();
+        assert_eq!(load_lenient(&empty).unwrap(), (Vec::new(), 0));
+    }
+
+    #[test]
+    fn lenient_scan_refuses_links_foreign_owners_and_writers() {
+        let temp = Temp::new();
+        let dir = temp.0.join("history");
+        append_in(&dir, &entry("Reading")).unwrap();
+        let writer = File::open(&dir).unwrap();
+        lock(&writer).unwrap();
+        assert!(load_lenient(&dir).is_err());
+        drop(writer);
+        let target = temp.0.join("target");
+        fs::write(&target, b"untouched").unwrap();
+        let alias = temp.0.join("alias");
+        std::os::unix::fs::symlink(&dir, &alias).unwrap();
+        assert!(load_lenient(&alias).is_err());
+        let path = dir.join("activity.jsonl");
+        fs::remove_file(&path).unwrap();
+        std::os::unix::fs::symlink(&target, &path).unwrap();
+        assert!(load_lenient(&dir).is_err());
+        assert_eq!(fs::read(&target).unwrap(), b"untouched");
     }
 
     #[test]
