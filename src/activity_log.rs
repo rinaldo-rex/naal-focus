@@ -211,7 +211,7 @@ fn persist_in(directory: &Path, original: Option<&Entry>, entry: &Entry) -> Resu
 
 /// The private `~/.naal-focus/` directory with link and owner guards.
 /// Opening it follows neither symlinks nor renamed/replaced paths.
-fn private_dir(directory: &Path) -> Result<File, String> {
+pub(crate) fn private_dir(directory: &Path) -> Result<File, String> {
     match DirBuilder::new().mode(0o700).create(directory) {
         Ok(()) => {}
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
@@ -299,7 +299,7 @@ pub fn load_lenient(directory: &Path) -> Result<(Vec<Entry>, usize), String> {
     Ok((entries, skipped))
 }
 
-fn lock(file: &File) -> Result<(), String> {
+pub(crate) fn lock(file: &File) -> Result<(), String> {
     // SAFETY: a live descriptor; flock has no pointer arguments. Linux supports
     // advisory locks on directory descriptors as well as regular files.
     if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
@@ -307,7 +307,7 @@ fn lock(file: &File) -> Result<(), String> {
     }
     Ok(())
 }
-fn lock_shared(file: &File) -> Result<(), String> {
+pub(crate) fn lock_shared(file: &File) -> Result<(), String> {
     // SAFETY: a live descriptor; flock has no pointer arguments. Linux supports
     // advisory locks on directory descriptors as well as regular files.
     if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_SH | libc::LOCK_NB) } != 0 {
@@ -315,7 +315,7 @@ fn lock_shared(file: &File) -> Result<(), String> {
     }
     Ok(())
 }
-fn open_at(dir: &File, name: &CStr, flags: libc::c_int) -> Result<File, std::io::Error> {
+pub(crate) fn open_at(dir: &File, name: &CStr, flags: libc::c_int) -> Result<File, std::io::Error> {
     // SAFETY: live directory and NUL-terminated name; mode accompanies O_CREAT.
     let fd = unsafe {
         libc::openat(
@@ -415,7 +415,7 @@ fn append_transaction(
     Ok(())
 }
 
-fn check_owner(file: &File) -> Result<(), String> {
+pub(crate) fn check_owner(file: &File) -> Result<(), String> {
     // SAFETY: geteuid takes no arguments and has no preconditions.
     if file.metadata().map_err(|e| e.to_string())?.uid() != unsafe { libc::geteuid() } {
         return Err("Activity history must be owned by the current user.".into());

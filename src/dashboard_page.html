@@ -1,0 +1,610 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Naal Focus &mdash; Activity</title>
+<style>
+:root {
+  color-scheme: light dark;
+  --bg: #f4f5f7; --panel: #ffffff; --border: #e2e4e9;
+  --fg: #2e3237; --mut: #7b8089; --accent: #3d7cbf;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #131417; --panel: #1d1f24; --border: #2c2f36;
+    --fg: #e4e6ea; --mut: #9aa0ab; --accent: #6ea3dd;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; font: 14px/1.45 system-ui, sans-serif; background: var(--bg); color: var(--fg); }
+header { display: flex; align-items: center; gap: 14px; max-width: 1100px; margin: 0 auto; padding: 16px 20px 6px; flex-wrap: wrap; }
+.brand { font-weight: 600; display: flex; align-items: center; gap: 8px; white-space: nowrap; }
+.brand .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--accent); }
+.brand .sub { color: var(--mut); font-weight: 400; }
+#tabs { display: flex; gap: 4px; margin-left: auto; flex-wrap: wrap; }
+#tabs a { padding: 6px 12px; border-radius: 8px; color: var(--mut); text-decoration: none; font-size: 13px; }
+#tabs a:hover { color: var(--fg); }
+#tabs a.active { background: var(--panel); border: 1px solid var(--border); color: var(--fg); }
+#download { font: inherit; font-size: 13px; padding: 6px 12px; border-radius: 8px; border: 1px solid var(--border); background: var(--panel); color: var(--mut); cursor: pointer; }
+#download:hover { color: var(--fg); }
+main { max-width: 1100px; margin: 0 auto; padding: 8px 20px 20px; }
+footer { max-width: 1100px; margin: 0 auto; padding: 0 20px 30px; color: var(--mut); font-size: 12px; }
+.layout2 { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 16px; align-items: start; }
+@media (max-width: 860px) { .layout2 { grid-template-columns: 1fr; } }
+.card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 16px; margin-bottom: 16px; }
+.card h2 { font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--mut); margin: 0 0 12px; }
+p.mut { color: var(--mut); font-size: 12px; margin: 4px 0 12px; }
+/* Year map */
+.ymap { display: flex; gap: 3px; overflow-x: auto; padding-bottom: 4px; }
+.ylabels { display: flex; flex-direction: column; gap: 3px; margin-right: 5px; }
+.ylabels span { height: 11px; font-size: 9px; color: var(--mut); line-height: 11px; }
+.ycol { display: flex; flex-direction: column; gap: 3px; }
+.ycol .mlabel { height: 13px; font-size: 9px; color: var(--mut); margin-bottom: 0; }
+.ycell { width: 11px; height: 11px; border-radius: 3px; background: var(--bg); border: 1px solid var(--border); }
+.ycell.l1 { background: color-mix(in srgb, var(--accent) 30%, var(--panel)); border-color: transparent; }
+.ycell.l2 { background: color-mix(in srgb, var(--accent) 50%, var(--panel)); border-color: transparent; }
+.ycell.l3 { background: color-mix(in srgb, var(--accent) 72%, var(--panel)); border-color: transparent; }
+.ycell.l4 { background: var(--accent); border-color: transparent; }
+.ycell.future { background: transparent; border-style: dashed; }
+.ycell[role="button"] { cursor: pointer; }
+.ycell[role="button"]:hover { outline: 1px solid var(--accent); outline-offset: 1px; }
+/* Attention share */
+.wrow { display: flex; align-items: center; gap: 8px; margin: 5px 0; }
+.wrow .wlabel { width: 46px; font-size: 11px; color: var(--mut); text-align: right; flex: none; }
+.wrow .wbarwrap { flex: 1; min-width: 120px; }
+.wrow .wbar { display: flex; height: 14px; border-radius: 4px; overflow: hidden; background: var(--bg); }
+.wrow .wseg { height: 100%; }
+.wrow .wnum { width: 30px; font-size: 11px; color: var(--mut); flex: none; }
+/* Tags */
+.tagrow { display: flex; align-items: center; gap: 8px; margin: 4px 0; }
+.tagrow .tagname { width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.tagrow .tagbar { flex: 1; height: 8px; border-radius: 4px; background: var(--bg); overflow: hidden; }
+.tagrow .tagfill { height: 100%; border-radius: 4px; }
+.tagrow .tagnum { font-size: 11px; color: var(--mut); width: 22px; text-align: right; }
+button.linklike { border: 0; background: none; color: inherit; font: inherit; padding: 0; cursor: pointer; text-align: left; }
+/* Streak */
+.streak p { margin: 5px 0; }
+.streak .big { font-size: 15px; }
+.scircles { display: flex; gap: 9px; margin: 10px 0 4px; flex-wrap: wrap; }
+.scircle { width: 40px; height: 40px; border-radius: 50%; border: 1.5px solid var(--border); display: flex; align-items: center; justify-content: center; font-size: 11px; color: var(--mut); flex: none; }
+.scircle.on { border-color: var(--accent); color: var(--fg); background: color-mix(in srgb, var(--accent) 15%, var(--panel)); }
+/* Day view */
+.daynav { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
+.daynav .daytitle { font-weight: 600; }
+.daynav button.navbtn { font: inherit; padding: 4px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--panel); color: var(--mut); cursor: pointer; }
+.daynav button.navbtn:hover { color: var(--fg); }
+.seg { display: flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; margin-left: auto; }
+.seg button { font: inherit; font-size: 12px; border: 0; background: transparent; padding: 5px 10px; color: var(--mut); cursor: pointer; }
+.seg button.on { background: var(--accent); color: #fff; }
+.rail { position: relative; display: flex; flex-direction: column; }
+.rail::before { content: ""; position: absolute; left: 90px; top: 10px; bottom: 10px; width: 2px; background: var(--border); }
+.entryrow, .gaprow { display: grid; grid-template-columns: 74px 26px 1fr; column-gap: 8px; position: relative; }
+.entryrow { padding: 5px 0; }
+.etime { font-size: 12px; color: var(--mut); padding-top: 2px; }
+.node { display: flex; justify-content: center; padding-top: 5px; }
+.node i { width: 10px; height: 10px; border-radius: 50%; background: var(--accent); border: 2px solid var(--panel); z-index: 1; }
+.etext { overflow-wrap: anywhere; }
+.chip { display: inline-block; font-size: 11px; color: var(--mut); background: var(--bg); border-radius: 99px; padding: 1px 8px; margin-left: 6px; vertical-align: 1px; }
+.gaprow { padding: 3px 0; }
+.gaprow .gnode { border-left: 2px dashed var(--border); height: 100%; margin-left: 12px; }
+.gaprow .gtext { font-size: 11px; color: var(--mut); letter-spacing: 0.08em; padding-top: 3px; }
+/* Dial */
+.dial { display: block; margin: 0 auto; max-width: 230px; width: 100%; height: auto; }
+.dialnote { text-align: center; font-size: 11px; color: var(--mut); margin: 8px 0 0; }
+/* Month view */
+.mnav { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+.mnav .mtitle { font-weight: 600; }
+.fchips { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
+.fchip { font: inherit; font-size: 12px; border: 1px solid var(--border); background: transparent; color: var(--mut); border-radius: 99px; padding: 3px 11px; cursor: pointer; }
+.fchip.on { border-color: var(--accent); color: var(--fg); background: color-mix(in srgb, var(--accent) 18%, var(--panel)); }
+.mgrid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; }
+.mgrid .wd { text-align: center; color: var(--mut); font-size: 11px; padding: 4px 0; }
+.mcell { position: relative; min-height: 62px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); padding: 6px; cursor: pointer; }
+.mcell .mday { font-size: 12px; }
+.mcell.weekend { background: var(--bg); }
+.mcell.today { border-color: var(--accent); }
+.mcell.sel { outline: 2px solid var(--accent); outline-offset: 1px; }
+.mcell.dim { opacity: 0.15; pointer-events: none; }
+.mcell.blank { border: 0; background: transparent; cursor: default; }
+.mcell .badge { position: absolute; top: 5px; right: 8px; font-size: 11px; color: var(--mut); }
+.mcell .dots { display: flex; gap: 3px; position: absolute; bottom: 7px; left: 7px; }
+.mcell .dots i { width: 7px; height: 7px; border-radius: 50%; }
+.msel { margin-top: 14px; border-top: 1px solid var(--border); padding-top: 12px; }
+.msel h3 { margin: 0 0 6px; font-size: 13px; }
+.drow { display: grid; grid-template-columns: 70px 1fr; column-gap: 10px; padding: 6px 0; }
+.drow .dtime { font-size: 12px; color: var(--mut); padding-top: 2px; }
+.drow .dtext { overflow-wrap: anywhere; }
+/* Heroes */
+.hero { max-width: 540px; margin: 90px auto 0; text-align: center; background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 38px 30px; }
+.hero h2 { font-size: 18px; color: var(--fg); margin: 0 0 10px; }
+.hero p { color: var(--mut); margin: 6px 0; }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand"><span class="dot"></span>Naal Focus <span class="sub">activity</span></div>
+  <nav id="tabs" aria-label="Views"></nav>
+  <button id="download" type="button" title="Save a self-contained copy of this page">Download HTML</button>
+</header>
+<main id="app"></main>
+<footer id="foot"></footer>
+<script type="application/json" id="naal-data">__NAAL_DATA__</script>
+<script>
+(() => {
+  "use strict";
+  const DATA = JSON.parse(document.getElementById("naal-data").textContent);
+  const app = document.getElementById("app");
+  const foot = document.getElementById("foot");
+  const tabsNav = document.getElementById("tabs");
+  const TABS = ["overview", "day", "month"];
+  const MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+  const WD = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
+  const state = {
+    tab: TABS.includes(location.hash.slice(1)) ? location.hash.slice(1) : "overview",
+    day: DATA.today,
+    month: DATA.today.slice(0, 7),
+    sel: null,
+    filter: new Set(),
+    relative: false,
+  };
+
+  function el(tag, cls, ...kids) {
+    const node = document.createElement(tag);
+    if (cls) node.className = cls;
+    for (const kid of kids) {
+      if (kid === null || kid === undefined || kid === false) continue;
+      node.append(kid.nodeType ? kid : document.createTextNode(String(kid)));
+    }
+    return node;
+  }
+  function svg(tag, attrs, ...kids) {
+    const node = document.createElementNS("http://www.w3.org/2000/svg", tag);
+    for (const [key, value] of Object.entries(attrs || {})) node.setAttribute(key, value);
+    for (const kid of kids) if (kid) node.append(kid);
+    return node;
+  }
+  function parts(key) {
+    const [y, m, d] = key.split("-").map(Number);
+    return { y, m, d };
+  }
+  // Days since 1970-01-01 of a date key, and back, without time zones.
+  function keyToDays(key) {
+    const { y, m, d } = parts(key);
+    return Math.floor(Date.UTC(y, m - 1, d) / 86400000);
+  }
+  function daysToKey(days) {
+    const t = new Date(days * 86400000);
+    return [t.getUTCFullYear(), t.getUTCMonth() + 1, t.getUTCDate()]
+      .map((n, i) => (i ? String(n).padStart(2, "0") : String(n))).join("-");
+  }
+  // 0 = Monday .. 6 = Sunday.
+  function weekday(key) { return (keyToDays(key) + 3) % 7; }
+  function weekStart(key) { return keyToDays(key) - weekday(key); }
+  function fmt12(minutes) {
+    const h = Math.floor(minutes / 60), m = minutes % 60;
+    return `${((h + 11) % 12) + 1}:${String(m).padStart(2, "0")} ${h < 12 ? "AM" : "PM"}`;
+  }
+  function fmtShort(key) {
+    const { m, d } = parts(key);
+    return `${MONTHS[m - 1].slice(0, 3)} ${d}`;
+  }
+  function fmtLong(key) {
+    const { y, m, d } = parts(key);
+    return `${MONTHS[m - 1]} ${d}, ${y}`;
+  }
+  function fmtWeekday(key) {
+    return ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"][weekday(key)];
+  }
+  function rel(ms) {
+    const diff = DATA.generated_ms - ms;
+    if (diff < 60000) return "just now";
+    if (diff < 3600000) return `${Math.round(diff / 60000)} mins ago`;
+    if (diff < 86400000) return `${Math.round(diff / 3600000)} hours ago`;
+    if (diff < 604800000) return `${Math.round(diff / 86400000)} days ago`;
+    return null;
+  }
+  function hue(tag) {
+    let h = 0;
+    for (const c of tag) h = (h * 31 + c.codePointAt(0)) % 360;
+    return h;
+  }
+  function tagColor(tag) { return `hsl(${hue(tag)} 55% 50%)`; }
+  function entriesOf(key) { return DATA.entries.filter((e) => e.date === key); }
+  function entriesOfMonth(mkey) {
+    return DATA.entries.filter((e) => e.date.startsWith(mkey + "-"));
+  }
+  function level(n) { return n >= 5 ? 4 : n >= 3 ? 3 : n >= 2 ? 2 : 1; }
+  function card(title, ...kids) {
+    const cardEl = el("div", "card");
+    if (title) cardEl.append(el("h2", null, title));
+    for (const kid of kids) cardEl.append(kid);
+    return cardEl;
+  }
+  function quietGap() {
+    return el("div", "gaprow", el("span"), el("span", "gnode"), el("span", "gtext", "quiet"));
+  }
+
+  function buildTabs() {
+    tabsNav.replaceChildren();
+    for (const tab of TABS) {
+      const link = el("a", tab === state.tab ? "active" : null, tab[0].toUpperCase() + tab.slice(1));
+      link.href = "#" + tab;
+      tabsNav.append(link);
+    }
+  }
+  function go(tab) {
+    if (state.tab !== tab) {
+      state.tab = tab;
+      if (!location.hash.endsWith(tab)) location.hash = "#" + tab;
+    }
+    render();
+  }
+  addEventListener("hashchange", () => {
+    const tab = location.hash.slice(1);
+    if (TABS.includes(tab) && tab !== state.tab) {
+      state.tab = tab;
+      render();
+    }
+  });
+
+  function renderOverview() {
+    const layout = el("div", "layout2");
+    const yearBox = card(`${DATA.year} year map`);
+    const grid = el("div", "ymap");
+    const labels = el("div", "ylabels", el("span"), el("span", null, "Mon"), el("span"), el("span"), el("span"), el("span", null, "Fri"), el("span"));
+    const columns = [];
+    for (const date of DATA.year_dates) columns.push(date);
+    const startPad = weekday(DATA.year_dates[0]);
+    const total = startPad + columns.length;
+    const ncols = Math.ceil(total / 7);
+    let lastMonth = -1;
+    for (let c = 0; c < ncols; c++) {
+      const col = el("div", "ycol");
+      let monthLabel = null;
+      let labelled = false;
+      for (let r = 0; r < 7; r++) {
+        const idx = c * 7 + r - startPad;
+        const key = idx >= 0 && idx < columns.length ? columns[idx] : null;
+        if (key && !labelled) {
+          const m = parts(key).m;
+          if (m !== lastMonth) { monthLabel = MONTHS[m - 1].slice(0, 3); lastMonth = m; }
+          labelled = true;
+        }
+        const cell = el("div", "ycell");
+        if (key) {
+          const n = DATA.by_day[key] || 0;
+          if (key > DATA.today) {
+            cell.classList.add("future");
+            cell.title = `${fmtShort(key)} — ahead`;
+          } else if (n > 0) {
+            cell.classList.add("l" + level(n));
+            cell.title = `${fmtShort(key)} — ${n} reflection${n === 1 ? "" : "s"}`;
+            cell.setAttribute("role", "button");
+            cell.tabIndex = 0;
+            const open = () => { state.day = key; go("day"); };
+            cell.onclick = open;
+            cell.onkeydown = (ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); open(); } };
+          } else {
+            cell.title = `${fmtShort(key)} — quiet`;
+          }
+        }
+        col.append(cell);
+      }
+      if (monthLabel) col.append(el("div", "mlabel", monthLabel));
+      else col.append(el("div", "mlabel", "\u00a0"));
+      grid.append(col);
+    }
+    yearBox.append(labels, grid);
+    yearBox.append(el("p", "mut", "one square per day · darker means more reflections · quiet days are normal"));
+
+    const shareBox = card("Attention share");
+    shareBox.append(el("p", "mut", "tagged reflections per week · weeks without tagged reflections are left out"));
+    const weeks = DATA.weeks;
+    if (weeks.length) {
+      const max = Math.max(...weeks.map((w) => Object.values(w.tags).reduce((a, b) => a + b, 0)), 1);
+      for (const w of weeks) {
+        const row = el("div", "wrow");
+        row.title = `${fmtShort(w.start)} week — ${w.total} reflection${w.total === 1 ? "" : "s"}`;
+        row.append(el("span", "wlabel", fmtShort(w.start)));
+        const wrap = el("div", "wbarwrap");
+        const bar = el("div", "wbar");
+        bar.style.width = Math.max((100 * Object.values(w.tags).reduce((a, b) => a + b, 0)) / max, 3) + "%";
+        for (const [tag, n] of Object.entries(w.tags).sort((a, b) => b[1] - a[1])) {
+          const seg = el("span", "wseg");
+          seg.style.background = tagColor(tag);
+          seg.style.flexGrow = n;
+          seg.title = `#${tag}: ${n}`;
+          bar.append(seg);
+        }
+        wrap.append(bar);
+        const tagged = Object.values(w.tags).reduce((a, b) => a + b, 0);
+        row.append(wrap, el("span", "wnum", String(tagged)));
+        shareBox.append(row);
+      }
+    } else {
+      shareBox.append(el("p", "mut", "no tagged reflections yet — add #words to a reflection to see them here"));
+    }
+
+    const side = el("div", "side");
+    const tagsBox = card("Tags");
+    const tagRows = Object.entries(DATA.tag_totals);
+    if (tagRows.length) {
+      const tagMax = Math.max(...tagRows.map(([, n]) => n));
+      for (const [tag, n] of tagRows) {
+        const row = el("div", "tagrow");
+        const name = el("button", "linklike tagname", "#" + tag);
+        name.title = `Show ${fmtLong(state.month)}-view days with #${tag}`;
+        name.onclick = () => { state.filter = new Set([tag]); state.sel = null; go("month"); };
+        row.append(name);
+        const bar = el("div", "tagbar");
+        const fill = el("div", "tagfill");
+        fill.style.width = (100 * n) / tagMax + "%";
+        fill.style.background = tagColor(tag);
+        bar.append(fill);
+        row.append(bar, el("span", "tagnum", String(n)));
+        tagsBox.append(row);
+      }
+      tagsBox.append(el("p", "mut", "parsed #words from your own reflections"));
+    } else {
+      tagsBox.append(el("p", "mut", "no #words in your reflections yet"));
+    }
+    const streak = DATA.streak;
+    const streakBox = el("div", "card streak");
+    streakBox.append(el("h2", null, "Streak"));
+    streakBox.append(el("p", "big",
+      streak.current > 0 ? `${streak.current} day${streak.current === 1 ? "" : "s"} in a row` : "no active run"));
+    streakBox.append(el("p", null, `longest run: ${streak.longest} day${streak.longest === 1 ? "" : "s"}`));
+    streakBox.append(el("p", null,
+      `reflected on ${streak.logged_days} of the last ${streak.window_days} days`));
+    const circles = el("div", "scircles");
+    for (const w of streak.weeks) {
+      const circle = el("div", "scircle" + (w.days > 0 ? " on" : ""),
+        `${w.days}/7`);
+      circle.title = `week of ${fmtLong(w.start)} — ${w.total} reflection${w.total === 1 ? "" : "s"} on ${w.days} day${w.days === 1 ? "" : "s"}`;
+      circles.append(circle);
+    }
+    streakBox.append(circles, el("p", "mut", "a quiet day is a normal day"));
+    side.append(tagsBox, streakBox);
+    layout.append(el("div", null, yearBox, shareBox), side);
+    app.append(layout);
+  }
+
+  function renderDay() {
+    const layout = el("div", "layout2");
+    const dayCard = card(null);
+    const nav = el("div", "daynav");
+    const prev = el("button", "navbtn", "\u2039");
+    const next = el("button", "navbtn", "\u203a");
+    prev.title = "Previous day"; next.title = "Next day";
+    prev.onclick = () => { state.day = daysToKey(keyToDays(state.day) - 1); render(); };
+    next.onclick = () => { state.day = daysToKey(keyToDays(state.day) + 1); render(); };
+    nav.append(prev, el("span", "daytitle", `${fmtWeekday(state.day)}, ${fmtLong(state.day)}`), next);
+    if (state.day !== DATA.today) {
+      const today = el("button", "navbtn", "Today");
+      today.onclick = () => { state.day = DATA.today; render(); };
+      nav.append(today);
+    }
+    const seg = el("div", "seg");
+    const clock = el("button", state.relative ? null : "on", "Clock time");
+    const relative = el("button", state.relative ? "on" : null, "Relative");
+    clock.onclick = () => { state.relative = false; render(); };
+    relative.onclick = () => { state.relative = true; render(); };
+    seg.append(clock, relative);
+    nav.append(seg);
+    dayCard.append(nav);
+
+    const entries = entriesOf(state.day);
+    const rail = el("div", "rail");
+    entries.forEach((entry, i) => {
+      if (i > 0) rail.append(quietGap());
+      const text = state.relative
+        ? (rel(entry.ms) || fmtShort(entry.date))
+        : fmt12(entry.minutes);
+      const row = el("div", "entryrow",
+        el("span", "etime", text),
+        el("span", "node", el("i")),
+        el("span", "etext", entry.text));
+      for (const tag of entry.tags) row.lastChild.append(el("span", "chip", "#" + tag));
+      rail.append(row);
+    });
+    rail.append(quietGap());
+    dayCard.append(rail);
+    if (!entries.length) {
+      dayCard.append(el("p", "mut", "No reflections recorded on this day. Quiet is fine."));
+    }
+
+    const dialCard = card("Day dial");
+    dialCard.append(el("p", "mut", `${entries.length} reflection${entries.length === 1 ? "" : "s"} · pins at true times`));
+    const cx = 110, cy = 110, r = 78;
+    const polar = (minutes, radius) => {
+      const a = (minutes / 1440) * 2 * Math.PI;
+      return [cx + radius * Math.sin(a), cy - radius * Math.cos(a)];
+    };
+    const dial = svg("svg", { viewBox: "0 0 220 220", class: "dial", role: "img" });
+    dial.append(svg("circle", { cx, cy, r: 92, fill: "var(--bg)", stroke: "var(--border)", "stroke-width": 1 }));
+    const [x1, y1] = polar(480, r), [x2, y2] = polar(1080, r);
+    dial.append(svg("path", {
+      d: `M ${x1} ${y1} A ${r} ${r} 0 0 1 ${x2} ${y2}`,
+      fill: "none", stroke: "var(--accent)", "stroke-width": 7, opacity: 0.25,
+    }));
+    for (const minutes of [0, 360, 720, 1080]) {
+      const [tx, ty] = polar(minutes, 92), [lx, ly] = polar(minutes, 62);
+      dial.append(svg("line", { x1: tx, y1: ty, x2: lx, y2: ly, stroke: "var(--border)", "stroke-width": 1 }));
+      const label = svg("text", { x: lx, y: ly + 4, "text-anchor": "middle", style: "fill: var(--mut); font-size: 10px" });
+      label.append(document.createTextNode(String(minutes / 60).padStart(2, "0")));
+      dial.append(label);
+    }
+    for (const entry of entries) {
+      const [px, py] = polar(entry.minutes, r);
+      const pin = svg("circle", { cx: px, cy: py, r: 4.5, style: "fill: var(--accent); stroke: var(--panel); stroke-width: 1.5" });
+      pin.append(svg("title", null, document.createTextNode(fmt12(entry.minutes))));
+      dial.append(pin);
+    }
+    dialCard.append(dial);
+    dialCard.append(el("p", "dialnote", "midnight top · noon bottom · band 8 AM \u2013 6 PM"));
+    layout.append(dayCard, el("div", "side", dialCard));
+    app.append(layout);
+  }
+
+  function renderMonth() {
+    const mkey = state.month;
+    const { y, m } = parts(mkey + "-01");
+    const box = card(`${MONTHS[m - 1]} ${y}`);
+    const nav = el("div", "mnav");
+    const prev = el("button", "navbtn", "\u2039");
+    const next = el("button", "navbtn", "\u203a");
+    prev.title = "Previous month"; next.title = "Next month";
+    prev.onclick = () => { state.month = monthShift(mkey, -1); state.sel = null; render(); };
+    next.onclick = () => { state.month = monthShift(mkey, 1); state.sel = null; render(); };
+    nav.append(prev, el("span", "mtitle", `${MONTHS[m - 1]} ${y}`), next);
+    box.append(nav);
+
+    const monthEntries = entriesOfMonth(mkey);
+    const monthTags = new Set();
+    for (const e of monthEntries) for (const t of e.tags) monthTags.add(t);
+    const chipRow = el("div", "fchips");
+    if (monthTags.size) {
+      for (const tag of [...monthTags].sort()) {
+        const chip = el("button", "fchip" + (state.filter.has(tag) ? " on" : ""), "#" + tag);
+        chip.onclick = () => {
+          if (state.filter.has(tag)) state.filter.delete(tag);
+          else state.filter.add(tag);
+          render();
+        };
+        chipRow.append(chip);
+      }
+      if (state.filter.size) {
+        const clear = el("button", "fchip", "clear filter");
+        clear.onclick = () => { state.filter.clear(); render(); };
+        chipRow.append(clear);
+      }
+      box.append(el("p", "mut", "filter days by any tag (OR) · untagged days stay visible"));
+      box.append(chipRow);
+    }
+
+    const first = `${mkey}-01`;
+    const startPad = weekday(first);
+    const dim = new Date(Date.UTC(y, m, 0)).getUTCDate();
+    const matches = (key) => {
+      if (!state.filter.size) return true;
+      return entriesOf(key).some((e) => e.tags.some((t) => state.filter.has(t)));
+    };
+    const grid = el("div", "mgrid");
+    for (const name of WD) grid.append(el("div", "wd", name));
+    for (let i = 0; i < startPad; i++) grid.append(el("div", "mcell blank"));
+    for (let d = 1; d <= dim; d++) {
+      const key = `${mkey}-${String(d).padStart(2, "0")}`;
+      const dayEntries = entriesOf(key);
+      const cell = el("div", "mcell" + (weekday(key) >= 5 ? " weekend" : ""));
+      if (key === DATA.today) cell.classList.add("today");
+      if (state.sel === key) cell.classList.add("sel");
+      if (key > DATA.today || !matches(key)) cell.classList.add("dim");
+      cell.append(el("span", "mday", String(d)));
+      if (dayEntries.length) {
+        cell.append(el("span", "badge", String(dayEntries.length)));
+        const dots = el("div", "dots");
+        for (const tag of [...new Set(dayEntries.flatMap((e) => e.tags))].slice(0, 4)) {
+          const dot = el("i");
+          dot.style.background = tagColor(tag);
+          dots.append(dot);
+        }
+        cell.append(dots);
+        cell.title = `${fmtLong(key)} — ${dayEntries.length} reflection${dayEntries.length === 1 ? "" : "s"}`;
+      }
+      if (key <= DATA.today && matches(key)) {
+        cell.onclick = () => { state.sel = key; render(); };
+      }
+      grid.append(cell);
+    }
+    box.append(grid);
+
+    const detail = el("div", "msel");
+    if (state.sel) {
+      detail.append(el("h3", null, `${fmtWeekday(state.sel)}, ${fmtLong(state.sel)}`));
+      const dayEntries = entriesOf(state.sel);
+      if (!dayEntries.length) {
+        detail.append(el("p", "mut", "No reflections recorded on this day."));
+      }
+      for (const e of dayEntries) {
+        const row = el("div", "drow", el("span", "dtime", fmt12(e.minutes)), el("span", "dtext", e.text));
+        for (const tag of e.tags) row.lastChild.append(el("span", "chip", "#" + tag));
+        detail.append(row);
+      }
+    } else {
+      detail.append(el("p", "mut", "Select a day to read its reflections."));
+    }
+    box.append(detail);
+    app.append(box);
+  }
+
+  function monthShift(mkey, delta) {
+    const [y, m] = parts(mkey + "-01");
+    const t = new Date(Date.UTC(y, m - 1 + delta, 1));
+    return `${t.getUTCFullYear()}-${String(t.getUTCMonth() + 1).padStart(2, "0")}`;
+  }
+
+  function renderHero(title, paragraphs) {
+    const hero = el("div", "hero", el("h2", null, title));
+    for (const p of paragraphs) hero.append(el("p", null, p));
+    app.append(hero);
+  }
+
+  function renderFoot() {
+    const bits = [`Generated ${DATA.generated_local.time} \u00b7 ${DATA.generated_local.date_long}`];
+    if (!DATA.empty && !DATA.error) {
+      bits.push(`${DATA.entries.length} reflection${DATA.entries.length === 1 ? "" : "s"}`);
+    }
+    if (DATA.skipped > 0) {
+      bits.push(`${DATA.skipped} unreadable line${DATA.skipped === 1 ? "" : "s"} skipped`);
+    }
+    bits.push("stays on this computer");
+    foot.append(el("span", null, bits.join(" \u00b7 ")));
+  }
+
+  function render() {
+    app.replaceChildren();
+    foot.replaceChildren();
+    if (DATA.error) {
+      tabsNav.replaceChildren();
+      renderHero("History could not be read", [
+        DATA.error,
+        "The applet keeps running; your history file was not changed. Try opening the dashboard again.",
+      ]);
+    } else if (DATA.empty) {
+      tabsNav.replaceChildren();
+      renderHero("Nothing recorded yet", [
+        "When a reminder appears, type a short reflection and press Enter. It will show up here \u2014 counts, times of day, and tags, all from your own entries.",
+        "Nothing is inferred: no durations, no hours worked. A quiet day is a normal day.",
+      ]);
+    } else {
+      buildTabs();
+      if (state.tab === "day") renderDay();
+      else if (state.tab === "month") renderMonth();
+      else renderOverview();
+    }
+    renderFoot();
+  }
+
+  document.getElementById("download").onclick = () => {
+    // A self-contained copy: the same data, style, and script as this page.
+    const clone = document.documentElement.cloneNode(true);
+    clone.querySelector("#app").replaceChildren();
+    clone.querySelector("#foot").replaceChildren();
+    clone.querySelector("#tabs").replaceChildren();
+    const blob = new Blob(["<!doctype html>\n" + clone.outerHTML], { type: "text/html" });
+    const url = URL.createObjectURL(blob);
+    const link = el("a");
+    link.href = url;
+    link.download = "naal-focus-activity.html";
+    document.body.append(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 30000);
+  };
+
+  render();
+})();
+</script>
+</body>
+</html>
