@@ -18,7 +18,7 @@
 }
 * { box-sizing: border-box; }
 body { margin: 0; font: 14px/1.45 system-ui, sans-serif; background: var(--bg); color: var(--fg); }
-header { display: flex; align-items: center; gap: 14px; max-width: 1100px; margin: 0 auto; padding: 16px 20px 6px; flex-wrap: wrap; }
+header { display: flex; align-items: center; gap: 14px; max-width: 1280px; margin: 0 auto; padding: 16px 20px 6px; flex-wrap: wrap; }
 .brand { font-weight: 600; display: flex; align-items: center; gap: 8px; white-space: nowrap; }
 .brand .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--accent); }
 .brand .sub { color: var(--mut); font-weight: 400; }
@@ -28,8 +28,8 @@ header { display: flex; align-items: center; gap: 14px; max-width: 1100px; margi
 #tabs a.active { background: var(--panel); border: 1px solid var(--border); color: var(--fg); }
 #download { font: inherit; font-size: 13px; padding: 6px 12px; border-radius: 8px; border: 1px solid var(--border); background: var(--panel); color: var(--mut); cursor: pointer; }
 #download:hover { color: var(--fg); }
-main { max-width: 1100px; margin: 0 auto; padding: 8px 20px 20px; }
-footer { max-width: 1100px; margin: 0 auto; padding: 0 20px 30px; color: var(--mut); font-size: 12px; }
+main { max-width: 1280px; margin: 0 auto; padding: 8px 20px 20px; }
+footer { max-width: 1280px; margin: 0 auto; padding: 0 20px 30px; color: var(--mut); font-size: 12px; }
 .layout2 { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 16px; align-items: start; }
 @media (max-width: 860px) { .layout2 { grid-template-columns: 1fr; } }
 .card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 16px; margin-bottom: 16px; }
@@ -37,10 +37,10 @@ footer { max-width: 1100px; margin: 0 auto; padding: 0 20px 30px; color: var(--m
 p.mut { color: var(--mut); font-size: 12px; margin: 4px 0 12px; }
 /* Year map */
 .ymap { display: flex; gap: 3px; overflow-x: auto; padding-bottom: 4px; }
-.ylabels { display: flex; flex-direction: column; gap: 3px; margin-right: 5px; }
+.ylabels { display: flex; flex-direction: column; gap: 3px; margin-right: 5px; margin-top: 16px; }
 .ylabels span { height: 11px; font-size: 9px; color: var(--mut); line-height: 11px; }
 .ycol { display: flex; flex-direction: column; gap: 3px; }
-.ycol .mlabel { height: 13px; font-size: 9px; color: var(--mut); margin-bottom: 0; }
+.ycol .mlabel { height: 13px; font-size: 9px; color: var(--mut); }
 .ycell { width: 11px; height: 11px; border-radius: 3px; background: var(--bg); border: 1px solid var(--border); }
 .ycell.l1 { background: color-mix(in srgb, var(--accent) 30%, var(--panel)); border-color: transparent; }
 .ycell.l2 { background: color-mix(in srgb, var(--accent) 50%, var(--panel)); border-color: transparent; }
@@ -252,7 +252,10 @@ button.linklike { border: 0; background: none; color: inherit; font: inherit; pa
     const layout = el("div", "layout2");
     const yearBox = card(`${DATA.year} year map`);
     const grid = el("div", "ymap");
-    const labels = el("div", "ylabels", el("span"), el("span", null, "Mon"), el("span"), el("span"), el("span"), el("span", null, "Fri"), el("span"));
+    // Weekday labels: Monday on the first row, Friday on the fifth, as the
+    // left rail of the map itself.
+    const labels = el("div", "ylabels", el("span", null, "Mon"), el("span"), el("span"), el("span"), el("span", null, "Fri"), el("span"), el("span"));
+    grid.append(labels);
     const columns = [];
     for (const date of DATA.year_dates) columns.push(date);
     const startPad = weekday(DATA.year_dates[0]);
@@ -291,11 +294,12 @@ button.linklike { border: 0; background: none; color: inherit; font: inherit; pa
         }
         col.append(cell);
       }
-      if (monthLabel) col.append(el("div", "mlabel", monthLabel));
-      else col.append(el("div", "mlabel", "\u00a0"));
+      // Month label on top of each column, like the day squares below it.
+      if (monthLabel) col.prepend(el("div", "mlabel", monthLabel));
+      else col.prepend(el("div", "mlabel", "\u00a0"));
       grid.append(col);
     }
-    yearBox.append(labels, grid);
+    yearBox.append(grid);
     yearBox.append(el("p", "mut", "one square per day · darker means more reflections · quiet days are normal"));
 
     const shareBox = card("Attention share");
