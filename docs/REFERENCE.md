@@ -29,7 +29,7 @@ Uninstalling also leaves `~/.naal-focus/` activity history untouched. Both scrip
 
 ## Settings and controls
 
-Click the panel/dock icon for a compact popup with status, the recurring-reminders toggle, **Show now**, **Snooze 15 min** (or **Resume** while snoozed), and **Settings…**. Detailed preferences and quote editing live only in the dedicated settings window, grouped into **Timing**, **Appearance**, and **Reflection**. The window stays open when clicking elsewhere. Reopening settings activates the existing window rather than creating another; `naal-focus --settings` uses the same entry point.
+Click the panel/dock icon for a compact popup with status, the recurring-reminders toggle, **Show now**, **Snooze 15 min** (or **Resume** while snoozed), **Dashboard…**, and **Settings…**. Detailed preferences and quote editing live only in the dedicated settings window, grouped into **Timing**, **Appearance**, and **Reflection**. The window stays open when clicking elsewhere. Reopening settings activates the existing window rather than creating another; `naal-focus --settings` uses the same entry point.
 
 Settings live at `$XDG_CONFIG_HOME/naal-focus/settings.json`, falling back to `~/.config/naal-focus/settings.json`. Saves are atomic. Invalid, oversized, or unsupported-version files remain untouched until explicit **Save settings** replaces them.
 
@@ -71,7 +71,21 @@ Each JSON line is a versioned record with an opaque identity, UTC Unix timestamp
 {"version":1,"id":"0123456789abcdef0123456789abcdef","timestamp_unix_ms":1791100000000,"text":"Reviewing documentation."}
 ```
 
-New entries append; corrections atomically replace the matching entry while preserving other records. Retries with the same identity/payload are idempotent. Earlier version-1 records without an ID remain readable and are preserved. Malformed, incomplete, oversized, or unsupported-version history is not silently truncated or overwritten: repair it before retrying. There is no history browser or dashboard yet.
+New entries append; corrections atomically replace the matching entry while preserving other records. Retries with the same identity/payload are idempotent. Earlier version-1 records without an ID remain readable and are preserved. Malformed, incomplete, oversized, or unsupported-version history is not silently truncated or overwritten: repair it before retrying.
+
+## Activity dashboard
+
+**Dashboard…** in the quick-controls popup rebuilds the dashboard from the current history on every open — it is always fresh at open — writes one private HTML file beside the logs at `~/.naal-focus/dashboard.html` (0600, owner-only, with the same symlink/hardlink refusals as `activity.jsonl`), and opens it in the default browser through `xdg-open`. An already-open tab keeps its old snapshot until the dashboard is opened again or the tab is reloaded.
+
+The page is fully self-contained: no remote assets, fonts, or network requests. Every reflection is embedded as escaped JSON and rendered as plain text, never as markup or script. Views switch in place and stay deep-linkable by hash (`#day`, `#month`):
+
+- **Overview** — a calendar-year day map (one square per day, intensity by reflection count; days after today stay blank), weekly attention share of *tagged* reflections below it (weeks without tagged reflections are omitted, never inferred), and side panels for tag counts and the day-presence streak with per-week circles, the longest run, and a days-logged fraction phrased gently. Quiet days are normal; nothing counts them as failure.
+- **Day** — the day's reflections on a timeline (12-hour clock times like `11:04 AM`, or a **Relative** toggle like `43 mins ago`), with explicit quiet markers closing the gaps and a 24-hour day dial (midnight top, noon bottom, pins at true minutes, an 8 AM–6 PM band). ‹ › walks days; year-map squares open the day they represent.
+- **Month** — a calendar with weekend shading, today outlined, per-day counts and tag dots, multi-tag **OR** filter chips (non-matching days dim and become unclickable), and a detail panel for the selected day.
+
+Only documented history fields are used: counts, times of day, day presence, and explicit `#tag` vocabulary (case-insensitive, deduplicated per entry). Writing duration is never measured, so the dashboard never presents durations, hours worked, or coverage as facts; missing entries are silence, not inactivity. Tags come solely from `#words` in submitted text — nothing is inferred.
+
+**Download HTML** on the page saves a self-contained copy of the dashboard that keeps working offline, since all data is embedded. The footer notes the generation time, reflection count, and any skipped lines. Missing or empty history shows a friendly empty state explaining how the first reflection lands there — no fake numbers. Malformed history lines are skipped individually and reported in that footnote; an unreadable history opens a restrained error page instead of a misleading empty one, and the applet keeps running with its history unchanged.
 
 Basic caret navigation, selection, and UTF-8/compose input are supported; clipboard integration and full IME support are not implemented. Very long single-line reflections scroll while editing and are shortened visually in the accepted-text view, without shortening the saved record.
 
@@ -130,6 +144,7 @@ This is not a screen lock. Compositor shortcuts can still work; focus restoratio
 | `src/applet.rs`, `src/applet/` | Quick popup, grouped settings draft, desktop launch and single-window activation |
 | `src/config.rs` | Settings, quote parsing/formatting, persistence |
 | `src/activity.rs`, `src/activity_log.rs` | Reflection editing/countdowns, private history and atomic corrections |
+| `src/dashboard.rs`, `src/dashboard_page.html` | Pure activity-dashboard generation, private writer, detached browser open |
 | `src/schedule.rs` | Scheduling, snooze, quote rotation |
 | `src/engine.rs`, `src/guard.rs`, `src/process.rs` | Shared controls, safety, supervision |
 | `src/overlay.rs`, `src/render.rs` | Overlay surfaces and text rendering |

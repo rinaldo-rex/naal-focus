@@ -33,7 +33,8 @@ cargo test --locked
 |---|---|---|
 | Settings and quotes | Defaults, numeric/schema limits, typing-limit bounds/backward defaults, multiline parsing and round trips, atomic-save round trips, corrupt-file preservation | Power-loss recovery, permissions failures, complete popup interactions |
 | Reflection state | UTF-8 editing/selection, exact countdown holds/resumes, save-failure drafts, stale acknowledgments, fixed typing deadline, saved-text reopening/cancellation, no pause on click alone | Full keyboard/input-method integration and all live cancellation paths |
-| Activity persistence | Private permissions, symlink/hardlink refusal, lock contention, incomplete/malformed history preservation, partial-write rollback, delayed worker acknowledgment, idempotent retries, atomic same-ID corrections, preserved timestamps/legacy records, stale-correction refusal | Real power loss, filesystem stalls, and device failure |
+| Activity persistence | Private permissions, symlink/hardlink refusal, lock contention, incomplete/malformed history preservation, partial-write rollback, delayed worker acknowledgment, idempotent retries, atomic same-ID corrections, preserved timestamps/legacy records, stale-correction refusal, lenient per-line scan skipping malformed/blank/duplicate/oversized lines | Real power loss, filesystem stalls, and device failure |
+| Activity dashboard | Tag parsing, civil-date round trips, Monday week bucketing, day-presence streaks, attention-share aggregation, escaping golden tests (`</script>`, quotes, `&`), empty/error/skipped-line states, writer permissions/link refusal/rewrites, browser command routing | Visual layout across other browsers and themes; the real panel popup click path (the page itself was live-verified in a browser, below) |
 | Scheduling | Full intervals, pause/snooze/resume, quote order, no overlap, unsafe-session and time-gap resets | Real suspend/wake and lock/unlock transitions |
 | Safety | Missing/stale observations block reminders; idle and lock reasons propagate | All live logind, COSMIC lock-marker, and input-seat transitions |
 | Process lifetime | Monotonic boot clock, singleton exclusion/release, child kill-and-reap on drop | Stalled renderer watchdog and parent-death signaling under live overlays |
@@ -71,6 +72,22 @@ The live review surfaced two feedback lessons, implemented the same day and re-v
 - Invalid numeric input renders its range message directly under the affected field in the destructive theme color, while typing.
 - A successful save shows a prominent "✓ Settings saved" banner at the top of the window, auto-clearing after some seconds.
 - Enter in a numeric field saves; leaving the settings window auto-saves a wholly valid draft (observed live: a changed interval reached the settings file without pressing Save). An invalid draft, e.g. an interval of 5, saves nothing, keeps its values, and keeps its inline errors.
+
+### Activity dashboard
+
+Checked on **2026-10-08** against the dashboard application source at `e39b78b3` with applet wiring `dc52fa38`:
+
+- `cargo test --locked`: 57 core/helper unit tests passed, including the new dashboard suite (escaping, tags, civil dates, bucketing, streaks, writer guards).
+- `just check` (applet-enabled): formatting, warnings-denied Clippy, and unit tests passed.
+- Generated pages with a rich fixture, an empty history, and a simulated unreadable history were opened in a real desktop browser from `file://`:
+  - Overview: 53 week columns × 7 day squares, future days blank, intensity by count, attention share of tagged weeks only, tag counts, streak circles with current/longest/fraction, gentle phrasing.
+  - Day: timeline with 12-hour times (`11:04 AM`-style), relative toggle (`43 mins ago`-style), quiet gap markers including the closing one, ‹ › day walking, 24-hour dial with band and pins at true minutes.
+  - Month: calendar with weekend shading, today outline, count badges, tag dots, multi-tag OR filter dimming non-matching days to unclickable, day detail below.
+  - Hash routing (`#day`, `#month`) and year-map square → day deep navigation worked; the console stayed clean.
+  - **Download HTML** saved a self-contained copy that rendered offline from the saved file.
+  - The empty fixture showed the friendly "Nothing recorded yet" hero; the unreadable fixture showed the restrained "History could not be read" panel with the reason rendered as text.
+
+Still awaiting manual acceptance at the real panel: the **Dashboard…** quick-control click path (generate → write `~/.naal-focus/dashboard.html` 0600 → `xdg-open` opens the default browser), popup closure on success, and the failure status line with an unreadable/home-less environment.
 
 ### Activity-logging verification
 
@@ -145,8 +162,9 @@ HOME="$test_home" ./target/debug/naal-focus-overlay --once --all --delay-secs 15
 | Deadline and persistence failure | An unfinished draft closes at the typing limit with no auto-save. Cancel/reopen cannot renew the allowance. A save error retains the draft without claiming success; watchdogs remain active. |
 | Focus restoration | After each dismissal method, the intended application accepts typing again. Restoration is compositor-controlled. |
 | Multiline quotes | Hard line breaks, blank paragraphs, literal bullets, long words, and long quotes remain understandable. Use a suitable duration for reading. |
-| Compact panel controls | Icon opens only status, reminders on/off, Show now, Snooze (or Resume while snoozed), and Settings…. No preferences/editor; safe controls remain usable in a small popup. |
+| Compact panel controls | Icon opens only status, reminders on/off, Show now, Snooze (or Resume while snoozed), Dashboard…, and Settings…. No preferences/editor; safe controls remain usable in a small popup. |
 | Settings window | Settings… opens a grouped, resizable normal window. Clicking elsewhere leaves it open; reopening raises the same window, including when minimized. Closing via its header bar leaves panel reminders running. Saved values/status synchronize; another client's save or a failed save does not overwrite a draft. Typing after Save survives its later acknowledgment. |
+| Dashboard… | From the popup, it rebuilds the page fresh, writes `~/.naal-focus/dashboard.html` privately (0600), opens the default browser, and closes the popup. Views, tabs, filters, and Download HTML behave as documented in the reference; reopening regenerates. With history unreadable, a restrained error page opens and the popup reports the failure without crashing. |
 | Recurring reminders and snooze | Opt in using controls. No reminder appears before a full interval; snoozing cancels visible/pending reminders, then waits the snooze plus a full interval. Disable recurrence afterward. |
 | Lock, idle, and suspend | Through the supervised applet, unsafe sessions suppress/cancel reminders. Returning waits a full interval with no catch-up burst. Save work before lock/suspend. |
 | Output hotplug and scaling | Adding/removing outputs during a visible reminder dismisses all surfaces. Repeat presentation tests at supported scales; fractional scaling is a documented limitation. |

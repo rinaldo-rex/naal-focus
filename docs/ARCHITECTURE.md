@@ -24,6 +24,7 @@ flowchart TD
 | Renderer (`src/render.rs`) | Rasterizes text into shared-memory ARGB8888 buffers using a local font; caches the quote and repaints only the input strip during editing. |
 | Reflection state (`src/activity.rs`) | Pure UTF-8 editor, held/resumed countdown, fixed typing allowance, and accepted-text/correction state. |
 | Activity history (`src/activity_log.rs`) | Private JSON-lines records, durable worker acknowledgments, idempotent retries, and atomic corrections. |
+| Dashboard (`src/dashboard.rs`, `src/dashboard_page.html`) | Pure generation of the self-contained activity page, private writer, and detached browser open. |
 | Settings (`src/config.rs`) | Validates preferences and quote syntax; loads and atomically saves JSON. |
 | Process boundaries (`src/process.rs`) | Desktop compositor routing, runtime locks, boot-time clock, and helper cleanup. |
 
@@ -38,6 +39,16 @@ The helper owns the log worker; there is no new supervisor storage protocol. One
 Generation tokens keep late save results from erasing a newer draft. Canceling does not undo a write already explicitly submitted. The input/render loop only polls the worker and continues checking safety; a stalled filesystem must not strand keyboard focus.
 
 Each output reuses two buffers with identical cached quote content. Only the input/status strip is repainted and damaged for text changes, caret blinking, or progress. Both buffers are initialized before normal typing begins; a compositor that stops releasing them cannot cause an unbounded allocation queue.
+
+## Activity dashboard
+
+The dashboard is generated, not served: **Dashboard…** rescans the history on every open through the lenient per-line loader, renders one self-contained HTML page, writes it privately beside the logs, and opens it through `xdg-open`. No server runs, and no history data is passed through process arguments or the network.
+
+Generation is a pure module — parsed entries, one timestamp, and a time-zone conversion in; a single HTML string out — fully unit-testable without the GUI. The page embeds the aggregated data as JSON inside an inert `<script type="application/json">` element with `<`, `&`, and the JS line separators escaped into JSON escapes, so reflection text can never close the element or become executable markup. All rendering and interactivity happens client-side in the embedded script, built exclusively through DOM APIs that treat text as text.
+
+The applet only polls the dashboard worker from its existing tick; blocking filesystem work never freezes the popup controls. Failures surface as the popup status line, never as a crash of the panel process. The output file is written privately (0600, owner-only) with the same symlink/hardlink refusals as `activity.jsonl`, replacing any earlier generation in place.
+
+Statistics claim nothing the history does not contain: counts, times of day, day presence, and explicit `#tag` vocabulary derive from timestamps and text; durations and hours worked are never claimed because writing duration is never measured. Weeks run Monday through Sunday; the year map covers the current calendar year; days after today render as blank squares rather than zero counts. Malformed lines are skipped individually and reported in a quiet footnote; an unreadable history renders a restrained error page instead of a misleading empty one.
 
 ## One timer across multiple instances
 
