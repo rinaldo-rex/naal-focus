@@ -59,8 +59,8 @@ Usage: naal-focus-overlay [OPTIONS]
 
 WARNING: captures keyboard focus on all covered monitors. Type to reflect;
 Enter saves text locally. Typing holds the normal countdown up to the typing
-limit. Escape/background click while typing discards and resumes; otherwise
-it dismisses ALL surfaces. No raw keys are logged. This is not a screen lock.
+limit. Escape while typing discards and resumes; otherwise it dismisses ALL
+surfaces. Background clicks do nothing. No raw keys are logged. This is not a screen lock.
 ";
 
 #[derive(Debug, Default)]
@@ -177,7 +177,6 @@ pub fn run(mut options: Options) -> Result<(), Box<dyn Error>> {
         saved_entry: None,
         retry_entry: None,
         modifiers: HashMap::new(),
-        pointer_inside: HashMap::new(),
         loop_handle: event_loop.handle(),
         dirty: false,
         last_paint: Duration::ZERO,
@@ -335,7 +334,6 @@ struct App {
     saved_entry: Option<Entry>,
     retry_entry: Option<(u64, Entry)>,
     modifiers: HashMap<wl_keyboard::WlKeyboard, Modifiers>,
-    pointer_inside: HashMap<wl_pointer::WlPointer, bool>,
     loop_handle: LoopHandle<'static, App>,
     dirty: bool,
     last_paint: Duration,
@@ -860,7 +858,7 @@ impl PointerHandler for App {
         &mut self,
         _: &Connection,
         _: &QueueHandle<Self>,
-        pointer: &wl_pointer::WlPointer,
+        _: &wl_pointer::WlPointer,
         events: &[PointerEvent],
     ) {
         for event in events {
@@ -871,46 +869,45 @@ impl PointerHandler for App {
             else {
                 continue;
             };
-            let size = active.size;
-            let scale = active.scale.clamp(1, 4) as f32;
-            let field = render::input_rect(size.0 as f32 * scale, size.1 as f32 * scale, scale);
-            let inside = field.contains(
-                event.position.0 as f32 * scale,
-                event.position.1 as f32 * scale,
+            self.dirty |= pointer_input(
+                &mut self.activity,
+                self.font.as_ref(),
+                &event.kind,
+                active.size,
+                active.scale.clamp(1, 4) as f32,
+                event.position,
+                boot_time(),
             );
-            if matches!(event.kind, PointerEventKind::Press { .. })
-                && inside
-                && !self.activity.field_visible()
-            {
-                self.activity.open_saved(boot_time());
-                self.dirty = true;
-            }
-            let caret = self.font.as_ref().and_then(|font| {
-                render::input_caret(font, &self.activity.editor, size, scale, event.position)
-            });
-            match event.kind {
-                PointerEventKind::Press { .. } => {
-                    self.pointer_inside.insert(pointer.clone(), caret.is_some());
-                    if let Some(caret) = caret {
-                        self.activity.editor.set_cursor(caret, false);
-                        self.dirty = true;
-                    }
-                }
-                PointerEventKind::Release { .. } => {
-                    // A drag beginning inside the field cannot become a background dismissal.
-                    let began_inside = self.pointer_inside.remove(pointer).unwrap_or(false);
-                    if !began_inside && caret.is_none() {
-                        if self.activity.cancel(boot_time()) {
-                            self.reason = Some("click");
-                        }
-                        self.dirty = true;
-                    }
-                }
-                _ => {}
-            }
         }
     }
 }
+/// Pointer input only edits the reflection field; it never cancels or dismisses.
+fn pointer_input(
+    activity: &mut Activity,
+    font: Option<&Font>,
+    kind: &PointerEventKind,
+    size: (u32, u32),
+    scale: f32,
+    position: (f64, f64),
+    now: Duration,
+) -> bool {
+    if !matches!(kind, PointerEventKind::Press { .. }) {
+        return false;
+    }
+    let field = render::input_rect(size.0 as f32 * scale, size.1 as f32 * scale, scale);
+    if !field.contains(position.0 as f32 * scale, position.1 as f32 * scale) {
+        return false;
+    }
+    let mut changed = activity.open_saved(now);
+    if let Some(caret) =
+        font.and_then(|font| render::input_caret(font, &activity.editor, size, scale, position))
+    {
+        activity.editor.set_cursor(caret, false);
+        changed = true;
+    }
+    changed
+}
+
 impl ShmHandler for App {
     fn shm_state(&mut self) -> &mut Shm {
         &mut self.shm
@@ -931,6 +928,112 @@ mod tests {
     fn parse(args: &[&str]) -> Result<Option<Options>, String> {
         Options::parse(args.iter().map(|s| (*s).into()))
     }
+    fn press() -> PointerEventKind {
+        PointerEventKind::Press {
+            time: 0,
+            button: 0x110,
+            serial: 0,
+        }
+    }
+    fn release() -> PointerEventKind {
+        PointerEventKind::Release {
+            time: 0,
+            button: 0x110,
+            serial: 0,
+        }
+    }
+
+    #[test]
+    fn background_clicks_and_field_releases_preserve_reflection_and_timing() {
+        let now = Duration::from_secs(2);
+        for state in 0..5 {
+            let mut activity = Activity::new(Duration::from_secs(10), Duration::from_secs(30));
+            activity.mapped(Duration::ZERO);
+            if state > 0 {
+                activity.insert("Reflection", Duration::from_secs(1));
+            }
+            if state > 1 {
+                let (generation, text) = activity.submission().unwrap();
+                activity.saved(generation, &text, now);
+            }
+            if state > 2 {
+                activity.open_saved(now);
+            }
+            if state > 3 {
+                activity.insert(" correction", now);
+            }
+            let text = activity.editor.text().to_owned();
+            let displayed = activity.displayed_text().map(str::to_owned);
+            let editing = activity.editing();
+            let visible = activity.field_visible();
+            let generation = activity.generation();
+            let remaining = activity.remaining(Duration::from_secs(3));
+            let typing = activity.typing_fraction(Duration::from_secs(3));
+            let field = render::input_rect(1920.0, 1080.0, 1.0);
+            for (kind, position) in [
+                (press(), (0.0, 0.0)),
+                (release(), (0.0, 0.0)),
+                // Releasing inside the field must also be a no-op.
+                (release(), (field.x as f64 + 1.0, field.y as f64 + 1.0)),
+            ] {
+                assert!(!pointer_input(
+                    &mut activity,
+                    None,
+                    &kind,
+                    (1920, 1080),
+                    1.0,
+                    position,
+                    now
+                ));
+                assert_eq!(activity.editor.text(), text);
+                assert_eq!(activity.displayed_text(), displayed.as_deref());
+                assert_eq!(activity.editing(), editing);
+                assert_eq!(activity.field_visible(), visible);
+                assert_eq!(activity.generation(), generation);
+                assert_eq!(activity.remaining(Duration::from_secs(3)), remaining);
+                assert_eq!(activity.typing_fraction(Duration::from_secs(3)), typing);
+            }
+        }
+    }
+
+    #[test]
+    fn field_press_still_reopens_saved_text_and_positions_caret_without_pausing() {
+        let font = render::default_font().unwrap();
+        let mut activity = Activity::new(Duration::from_secs(10), Duration::from_secs(30));
+        activity.mapped(Duration::ZERO);
+        activity.insert("Reflection", Duration::from_secs(1));
+        let (generation, text) = activity.submission().unwrap();
+        activity.saved(generation, &text, Duration::from_secs(2));
+        let now = Duration::from_secs(3);
+        let remaining = activity.remaining(now);
+        let field = render::input_rect(1920.0, 1080.0, 1.0);
+        assert!(pointer_input(
+            &mut activity,
+            Some(&font),
+            &press(),
+            (1920, 1080),
+            1.0,
+            (field.x as f64 + 1.0, field.y as f64 + 1.0),
+            now,
+        ));
+        assert!(activity.field_visible());
+        assert!(!activity.editing());
+        assert_eq!(activity.editor.text(), "Reflection");
+        assert_eq!(activity.editor.cursor(), 0);
+        assert_eq!(activity.remaining(now), remaining);
+        // A drag/release outside the field cannot cancel the reopened editor.
+        assert!(!pointer_input(
+            &mut activity,
+            None,
+            &release(),
+            (1920, 1080),
+            1.0,
+            (0.0, 0.0),
+            now
+        ));
+        assert!(activity.field_visible());
+    }
+
     #[test]
     fn helper_reads_multiline_text_as_one_raw_quote_without_surfaces() {
         let quote = "Take a breath.\n\n- Notice.\n- Return.";

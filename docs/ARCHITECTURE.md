@@ -28,7 +28,7 @@ flowchart TD
 | Settings (`src/config.rs`) | Validates preferences and quote syntax; loads and atomically saves JSON. |
 | Process boundaries (`src/process.rs`) | Desktop compositor routing, runtime locks, boot-time clock, and helper cleanup. |
 
-The supervisor sends one selected quote to the helper as bounded UTF-8 on stdin, rather than placing quote text in process arguments. The helper creates coordinated overlays with one shared reflection state. Only Enter-submitted text is persisted; raw keys are never recorded. Escape/background click cancels a draft before ordinary dismissal; timeout, compositor closure, or output hotplug dismisses all surfaces.
+The supervisor sends one selected quote to the helper as bounded UTF-8 on stdin, rather than placing quote text in process arguments. The helper creates coordinated overlays with one shared reflection state. Only Enter-submitted text is persisted; raw keys are never recorded. Escape cancels a draft before ordinary dismissal; background clicks never cancel or dismiss; timeout, compositor closure, or output hotplug dismisses all surfaces.
 
 ## Reflection state and persistence
 

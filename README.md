@@ -2,7 +2,7 @@
 
 A COSMIC dock/panel applet that periodically dims all monitors with a mindfulness reminder.
 
-**Reminders capture keyboard focus.** Just breathe, or type an optional reflection. Esc/background click discards an active draft; otherwise it dismisses.
+**Reminders capture keyboard focus.** Just breathe, or type an optional reflection. Esc discards an active draft; otherwise it dismisses. Background clicks do nothing.
 
 ## Install
 

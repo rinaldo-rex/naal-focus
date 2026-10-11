@@ -38,7 +38,7 @@ cargo test --locked
 | Scheduling | Full intervals, pause/snooze/resume, quote order, no overlap, unsafe-session and time-gap resets | Real suspend/wake and lock/unlock transitions |
 | Safety | Missing/stale observations block reminders; idle and lock reasons propagate | All live logind, COSMIC lock-marker, and input-seat transitions |
 | Process lifetime | Monotonic boot clock, singleton exclusion/release, child kill-and-reap on drop | Stalled renderer watchdog and parent-death signaling under live overlays |
-| Overlay input and rendering | CLI/stdin limits, parent/helper budget propagation, multiline layout, wrapping, premultiplied pixels, input hit-testing/scale/scroll, progress pixels, cached-background preservation across saved/editing transitions | Wayland surface lifecycle, visible readability, keyboard suppression, dismissal, focus restoration, output hotplug |
+| Overlay input and rendering | CLI/stdin limits, parent/helper budget propagation, multiline layout, wrapping, premultiplied pixels, input hit-testing/scale/scroll, background press/release no-ops across draft/saved/correction states, field reopening, progress pixels, cached-background preservation across saved/editing transitions | Wayland surface lifecycle, visible readability, keyboard suppression, dismissal, focus restoration, output hotplug |
 | Native applet helpers | Multiline editor content, Snooze/Resume selection, desktop launch environment, settings validation, clean/dirty synchronization, failed-save and post-save draft retention | Dock/panel popup layout, unsaved-edit synchronization across visible windows |
 | Settings-window process | Concurrent startup exclusion, existing-process activation, window-lock release/relaunch, supervisor survival after settings-process termination | Unsaved-edit synchronization across visible windows; the rest (visible layout, click-outside persistence, header-bar close, real field/button interactions) was live-accepted at the panel on 2026-10-06 |
 | Shared supervisor | Three clients share settings/snooze, corrupt-file repair, lock-overlap retry, secondary shutdown, owner takeover, snooze retention | Cross-process crash scenarios, live helper cancellation during takeover |
@@ -124,7 +124,7 @@ Checked on **2026-10-06**. One-shot runs used the debug build at `5df4b3ea` (act
 | Check | Result |
 |---|---|
 | Escape while writing | Draft discarded, remaining countdown resumed to a `timeout` dismissal; no record. |
-| Background click-release while writing | Same as Escape: draft discarded, countdown resumed, no record. The user confirmed the click did not reach the application underneath. |
+| Background click-release while writing (historical, before issue #7) | Previously discarded the draft and resumed the countdown; superseded by issue #7, which makes background clicks no-ops. The user confirmed the click did not reach the application underneath. |
 | No-input dismissal (final build) | Untouched overlay dismissed `timeout` after the normal duration; no record, no input-strip redraw. |
 | Escape with no draft | Immediate dismissal (`escape`); no record. |
 | Cancel/reopen draft handling | A second draft after a cancel cycle was still discarded — not dismissed — on Escape; the countdown resumed to a `timeout` dismissal. |
@@ -158,7 +158,8 @@ HOME="$test_home" ./target/debug/naal-focus-overlay --once --all --delay-secs 15
 | No-input timeout | Without typing, no log is created and every overlay disappears after the normal duration. |
 | Reflection input and progress | Typing works immediately and does not reach the application underneath; a fixed underline progress bar appears while the normal countdown is held. |
 | Submission and correction | Enter leaves accepted text, resumes the remaining normal countdown, and writes one private record. Clicking reopens without pausing until a text change; resaving corrects that record without changing its original timestamp. |
-| Escape and click-release | With a draft, each discards it and resumes the remaining countdown, restoring earlier accepted text for corrections. Without a draft, each dismisses all monitors. A background cancel must not click the application underneath; a field click must not cancel. |
+| Escape | With a draft, discards it and resumes the remaining countdown, restoring earlier accepted text for corrections. Without a draft, dismisses all monitors. |
+| Background click-release | Must not cancel a draft/correction, resume its held countdown, or dismiss any monitor. Test untouched, writing, saved, and reopened states, plus a field-to-background drag. Clicks must not reach the application underneath. Field clicks must still position the caret or reopen accepted text. Issue #7 behavior is unit-tested; live acceptance remains untested. |
 | Deadline and persistence failure | An unfinished draft closes at the typing limit with no auto-save. Cancel/reopen cannot renew the allowance. A save error retains the draft without claiming success; watchdogs remain active. |
 | Focus restoration | After each dismissal method, the intended application accepts typing again. Restoration is compositor-controlled. |
 | Multiline quotes | Hard line breaks, blank paragraphs, literal bullets, long words, and long quotes remain understandable. Use a suitable duration for reading. |

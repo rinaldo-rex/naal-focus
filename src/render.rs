@@ -329,7 +329,7 @@ pub fn render_input(
         image.text(font, &visible, size, field.y + 8.0 * scale, [173, 191, 182]);
         image.text(
             font,
-            "Saved · click your reflection to edit · Esc or background click dismisses",
+            "Saved · click your reflection to edit · Esc dismisses",
             12.0 * scale,
             field.y + field.height + 14.0 * scale,
             [150, 160, 157],
@@ -406,9 +406,9 @@ pub fn render_input(
         );
     }
     let hint = view.message.unwrap_or(if view.editing {
-        "Enter saves · Esc or background click discards · countdown resumes"
+        "Enter saves · Esc discards · countdown resumes"
     } else {
-        "Type to reflect, or just breathe · Esc or background click dismisses"
+        "Type to reflect, or just breathe · Esc dismisses"
     });
     let hint_size = 12.0 * scale;
     // Bound error/hint text to the output too; no submitted activity is echoed here.
