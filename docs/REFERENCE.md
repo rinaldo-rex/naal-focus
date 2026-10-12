@@ -55,11 +55,14 @@ Every monitor popup and `naal-focus --settings` shares one timer through session
 
 The overlay has one shared reflection across all covered monitors. Its single-line textbox is ready for input without clicking; the quote remains prominent. No typing means no logging and no change to the normal dismissal countdown.
 
-- First text input pauses the normal countdown, retaining its exact remaining duration. The underline below the field shows the fixed typing allowance remaining.
+- Three rows above the textbox form a rolling dial of previous reflections from the current local day, loaded fresh for each reminder. Consecutive identical texts are grouped; separate runs of the same task remain separate. Newest is nearest the input, with bottom/middle/top text opacity **70% / 40% / 20%**. Only the highlighted row shows the latest occurrence's relative age and repeat count (for example, `5 min ago · ×3`). Long rows are visually shortened, never truncated in storage or recall.
+- **↑** selects the newest group, then rolls older groups down into the highlighted bottom position; newer groups roll below it and disappear. **↓** reverses the dial. It stops at the first reflection of the local day, never wraps, and shows fewer than three rows at that boundary. History rows are keyboard-only; clicks do not recall them.
+- Browsing preserves the original draft, caret, and selection. **↓ past the newest** or **Esc** exits browsing and restores that editor. Typing or clicking the field also returns to the original draft. **Enter while browsing** only copies the selected text into the editable input; a second Enter saves it as a new moment with a fresh identity and timestamp. Earlier records are untouched.
+- First text input **or history browsing** pauses the normal countdown, retaining its exact remaining duration. The underline below the field shows the fixed typing allowance remaining. Exiting browsing resumes the countdown only if the original editor was not already writing. Displaying history without interaction holds nothing; missing history leaves the normal input usable, and a read failure shows a quiet unavailable hint.
 - **Enter** saves nonblank text (up to 2000 characters) through a background worker. After acknowledgment, the textbox disappears into a quiet rendering of the accepted text and the remaining normal countdown resumes—not a fresh duration.
 - Click the accepted text to reopen it. Merely clicking, moving the caret, or selecting text does not pause the countdown. Typing, replacing, or deleting text does. Enter safely corrects the same record, preserving its original timestamp; it does not add another log.
 - **Esc** cancels a writing draft or correction and resumes the remaining countdown. A correction restores the last accepted text. Closing a reopened but unchanged editor leaves the countdown untouched. Otherwise Esc dismisses all monitors. Background clicks never cancel or dismiss; field clicks still position the caret or reopen accepted text.
-- The typing allowance starts at the first text change and never restarts during that reminder, even across save/cancel/reopen cycles. While writing, reaching the limit dismisses all outputs and discards unsaved text. After saving or canceling, the remaining normal countdown may finish even if the typing allowance expires; further changes cannot renew it.
+- The typing allowance starts at the first text change or history-browse action and never restarts during that reminder, even across browse/save/cancel/reopen cycles. While writing or browsing, reaching the limit dismisses all outputs and discards unsaved text. After saving or canceling, the remaining normal countdown may finish even if the typing allowance expires; further changes cannot renew it.
 - Empty submissions are rejected. Failed saves retain the draft and display an error while the safety deadline stays active. Clearing all text is not a save or cancellation.
 - Cancellation is not Undo for a submission already initiated with Enter: an in-flight explicit save can complete. Unsaved drafts are never stored automatically.
 
@@ -143,7 +146,7 @@ This is not a screen lock. Compositor shortcuts can still work; focus restoratio
 |---|---|
 | `src/applet.rs`, `src/applet/` | Quick popup, grouped settings draft, desktop launch and single-window activation |
 | `src/config.rs` | Settings, quote parsing/formatting, persistence |
-| `src/activity.rs`, `src/activity_log.rs` | Reflection editing/countdowns, private history and atomic corrections |
+| `src/activity.rs`, `src/activity_log.rs`, `src/recall.rs` | Reflection editing/countdowns, private history and atomic corrections, today's grouped recall dial |
 | `src/dashboard.rs`, `src/dashboard_page.html` | Pure activity-dashboard generation, private writer, detached browser open |
 | `src/schedule.rs` | Scheduling, snooze, quote rotation |
 | `src/engine.rs`, `src/guard.rs`, `src/process.rs` | Shared controls, safety, supervision |

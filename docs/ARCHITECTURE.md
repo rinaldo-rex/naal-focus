@@ -21,9 +21,10 @@ flowchart TD
 | `Schedule` (`src/schedule.rs`) | Pure interval, snooze, and sequential quote-rotation policy. |
 | `Guard` (`src/guard.rs`) | Checks session state through system D-Bus/logind and input idle state through Wayland. |
 | `naal-focus-overlay` (`src/bin/overlay.rs`, `src/overlay.rs`) | Displays one reminder using one layer-shell surface per selected output. Has no recurring timer. |
-| Renderer (`src/render.rs`) | Rasterizes text into shared-memory ARGB8888 buffers using a local font; caches the quote and repaints only the input strip during editing. |
+| Renderer (`src/render.rs`) | Rasterizes text into shared-memory ARGB8888 buffers using a local font; caches the quote and repaints only the history/input strip during editing and dial motion. |
 | Reflection state (`src/activity.rs`) | Pure UTF-8 editor, held/resumed countdown, fixed typing allowance, and accepted-text/correction state. |
 | Activity history (`src/activity_log.rs`) | Private JSON-lines records, durable worker acknowledgments, idempotent retries, and atomic corrections. |
+| Reflection recall (`src/recall.rs`) | Read-only worker loads today's records; pure consecutive grouping, keyboard dial selection, relative labels, and shared rolling animation. |
 | Dashboard (`src/dashboard.rs`, `src/dashboard_page.html`) | Pure generation of the self-contained activity page, private writer, and detached browser open. |
 | Settings (`src/config.rs`) | Validates preferences and quote syntax; loads and atomically saves JSON. |
 | Process boundaries (`src/process.rs`) | Desktop compositor routing, runtime locks, boot-time clock, and helper cleanup. |
@@ -32,13 +33,15 @@ The supervisor sends one selected quote to the helper as bounded UTF-8 on stdin,
 
 ## Reflection state and persistence
 
-The field is initially ready for input, without holding the normal countdown. A text change freezes the remaining duration and starts the typing allowance once. Successful save or cancellation resumes exactly that duration. Accepted text replaces the field; clicking reopens it without pausing until the text changes. Corrections retain the record's ID and original timestamp. The typing deadline is never renewed; it applies while writing, not to the breathing countdown after a successful submission.
+The field is initially ready for input, without holding the normal countdown. A text change or explicit history browsing freezes the remaining duration and starts the typing allowance once. Successful save or cancellation resumes exactly that duration. Accepted text replaces the field; clicking reopens it without pausing until the text changes. Corrections retain the record's ID and original timestamp. The typing deadline is never renewed; it applies while writing or browsing, not to the breathing countdown after a successful submission.
 
 The helper owns the log worker; there is no new supervisor storage protocol. One in-flight submission prevents duplicate Enter events. The worker writes privately under `~/.naal-focus/` and acknowledges only after syncing. A stable advisory directory lock serializes append and correction operations even when the data-file inode changes. Corrections stream a validated history to a private temporary file, sync it, atomically rename it over the original, then sync the directory. Stable opaque IDs make acknowledgment retries idempotent; stale corrections fail without replacing newer data. History scanning bounds each record and does not load the whole file into memory.
 
 Generation tokens keep late save results from erasing a newer draft. Canceling does not undo a write already explicitly submitted. The input/render loop only polls the worker and continues checking safety; a stalled filesystem must not strand keyboard focus.
 
-Each output reuses two buffers with identical cached quote content. Only the input/status strip is repainted and damaged for text changes, caret blinking, or progress. Both buffers are initialized before normal typing begins; a compositor that stops releasing them cannot cause an unbounded allocation queue.
+At reminder opening, a separate worker scans history with the existing read-only owner/link/lock guards, filtering while scanning so only current-local-day records are retained. Future timestamps are excluded; valid records are stably sorted by timestamp and only consecutive identical texts are grouped. Missing history is empty; unreadable/busy history leaves input and safety checks active with an unavailable hint. The resulting snapshot is shared across all outputs. Browsing never modifies the editor; exiting restores its caret/selection and prior writing state. Enter recalls into the editor, not persistence; the next Enter uses the existing new-entry submission path. Corrections still apply only to this reminder's saved entry, never the recalled historical source.
+
+Each output reuses two buffers with identical cached quote content. The reserved history/input/status strip is repainted and damaged for text changes, dial animation, caret blinking, or progress; quote pixels remain cached and outside that damage. The same monotonic animation time is used across outputs. Both buffers are initialized before normal typing begins; a compositor that stops releasing them cannot cause an unbounded allocation queue.
 
 ## Activity dashboard
 

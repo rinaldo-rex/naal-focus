@@ -27,6 +27,8 @@ All monitor popups share the same settings and timer. Updates preserve existing 
 
 The quiet textbox is ready for typing without a click. Typing holds the normal countdown; **Enter** saves locally and resumes the remaining time. Saved text replaces the textbox—click it to correct the same entry. Clicking alone does not pause the countdown; changing text does.
 
+Three faded rows above the textbox show today's previous reflections, grouping consecutive repeats. **↑ / ↓** roll through the day's history without replacing your draft; only the highlighted row shows its age and repeat count. **Enter** copies the selected text into the textbox; edit if needed, then **Enter again** saves a new moment. **↓ past the newest** or **Esc** returns to your draft. Browsing shares the fixed typing allowance; simply displaying history does not pause the countdown.
+
 Set **Typing time limit** under **Settings… → Reflection** (default two minutes, adjustable from 30 seconds to ten minutes). A subtle underline shows time remaining while writing. Doing nothing preserves the normal reminder timeout.
 
 Logs stay private at `~/.naal-focus/activity.jsonl`. Only submitted text and its timestamp are recorded; no raw keystrokes or writing duration.

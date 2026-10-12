@@ -33,6 +33,7 @@ cargo test --locked
 |---|---|---|
 | Settings and quotes | Defaults, numeric/schema limits, typing-limit bounds/backward defaults, multiline parsing and round trips, atomic-save round trips, corrupt-file preservation | Power-loss recovery, permissions failures, complete popup interactions |
 | Reflection state | UTF-8 editing/selection, exact countdown holds/resumes, save-failure drafts, stale acknowledgments, fixed typing deadline, saved-text reopening/cancellation, no pause on click alone | Full keyboard/input-method integration and all live cancellation paths |
+| Reflection recall | Current-local-day filtering/future exclusion, stable chronological grouping of consecutive repeats, latest-age/count labels, rolling bounds/reversal, draft/caret/selection preservation, Enter-recall versus submission, fixed browsing allowance, nonblocking worker failure, keyboard-only rows, highlighted-only metadata, 70/40/20 fading, cached-quote preservation, desktop sizes and 2× scaling, fresh-record reuse without modifying the source | Live COSMIC key routing, animation smoothness, and simultaneous dial motion across monitors |
 | Activity persistence | Private permissions, symlink/hardlink refusal, lock contention, incomplete/malformed history preservation, partial-write rollback, delayed worker acknowledgment, idempotent retries, atomic same-ID corrections, preserved timestamps/legacy records, stale-correction refusal, lenient per-line scan skipping malformed/blank/duplicate/oversized lines | Real power loss, filesystem stalls, and device failure |
 | Activity dashboard | Tag parsing, civil-date round trips, Monday week bucketing, day-presence streaks, attention-share aggregation, escaping golden tests (`</script>`, quotes, `&`), empty/error/skipped-line states, writer permissions/link refusal/rewrites, browser command routing | Visual layout across other browsers and themes; the failure status line in a broken environment (the click path and page itself were live-accepted at the panel, below) |
 | Scheduling | Full intervals, pause/snooze/resume, quote order, no overlap, unsafe-session and time-gap resets | Real suspend/wake and lock/unlock transitions |
@@ -44,6 +45,20 @@ cargo test --locked
 | Shared supervisor | Three clients share settings/snooze, corrupt-file repair, lock-overlap retry, secondary shutdown, owner takeover, snooze retention | Cross-process crash scenarios, live helper cancellation during takeover |
 
 ## Latest recorded verification
+
+### Reflection recall dial (issue #8)
+
+Checked on **2026-10-12** against feature revision `55b7c464`:
+
+- The interactive temporary HTML preview was reviewed and approved before native implementation: three-row rolling window through today's history, consecutive repeat groups, arrows-only browsing, Enter copies then Enter saves, original draft retained, and 70% / 40% / 20% bottom/middle/top opacity. Relative age and multiplier appear only on the highlighted row. Browsing was explicitly approved to share the fixed typing allowance.
+- `cargo test --locked`: **72 core/helper unit tests passed**.
+- `just check`: formatting, warnings-denied Clippy, **82 applet-enabled unit tests**, and shell syntax passed.
+- `just check-native`: isolated three-client supervisor regression passed; no overlay requested and installed controls untouched.
+- Offscreen native rendering checked the dial, highlighted-only metadata, reserved quote/input separation, UTF-8/long rows, and premultiplied pixels at 1000×650 and 1920×1080 (scale 1), and 3414×1920 physical pixels (1707×960 logical, scale 2). Native sample frames were also visually inspected; this is not live Wayland acceptance.
+- Read-only `just probe` reported active/unlocked/not-idle guards and outputs DP-1 (1920×1080, scale 1), eDP-1 (1707×960 logical, scale 2), and HDMI-A-1 (1920×1080, scale 1). No surfaces were created and no focus captured.
+- History tests verify filtering without writes, malformed/oversized-line handling, a stalled loader's nonblocking polling, and reuse creating a fresh ID/timestamp while later correction leaves the historical source intact. The shared scanner now drains oversized lines in bounded chunks without consuming the next good record.
+
+**Still unverified live:** native recall key routing, rolling animation smoothness, synchronized dial motion on multiple monitors, and focus restoration with this feature. No live overlay was launched during this work; installation leaves applet reload to the user.
 
 ### Settings-window separation
 
@@ -156,6 +171,7 @@ HOME="$test_home" ./target/debug/naal-focus-overlay --once --all --delay-secs 15
 |---|---|
 | All-monitor presentation | Every connected monitor dims; one quote is readable across the tested screen sizes and scales. |
 | No-input timeout | Without typing, no log is created and every overlay disappears after the normal duration. |
+| Reflection recall dial | Today's previous groups appear in a three-row fading window (70/40/20); only the highlighted bottom row shows latest age/count. ↑ selects newest then rolls older groups down; ↓ reverses without wrapping or crossing yesterday. Enter only copies into the input; another Enter saves a new timestamp/ID. Type a draft and browse: ↓ past newest or Esc restores its text/caret/selection. Browsing holds only the existing fixed typing budget. History/background clicks do nothing. Verify identical selection and rolling on all monitors, empty history, long rows, and local-day boundaries. |
 | Reflection input and progress | Typing works immediately and does not reach the application underneath; a fixed underline progress bar appears while the normal countdown is held. |
 | Submission and correction | Enter leaves accepted text, resumes the remaining normal countdown, and writes one private record. Clicking reopens without pausing until a text change; resaving corrects that record without changing its original timestamp. |
 | Escape | With a draft, discards it and resumes the remaining countdown, restoring earlier accepted text for corrections. Without a draft, dismisses all monitors. |
