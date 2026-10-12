@@ -1,5 +1,8 @@
 //! Pure activity editor/countdown policy; no surfaces, disk I/O, or wall clock.
-use crate::activity_log::{MAX_ACTIVITY_CHARS, validate_text};
+use crate::{
+    activity_log::{MAX_ACTIVITY_CHARS, validate_text},
+    recall::Recall,
+};
 use std::time::Duration;
 
 #[derive(Debug, Default)]
@@ -114,6 +117,8 @@ pub enum Expiry {
 pub struct Activity {
     pub editor: Editor,
     pub error: Option<String>,
+    pub recall: Recall,
+    browse_was_editing: bool,
     editing: bool,
     mapped: bool,
     field_visible: bool,
@@ -129,6 +134,8 @@ impl Activity {
         Self {
             editor: Editor::default(),
             error: None,
+            recall: Recall::default(),
+            browse_was_editing: false,
             editing: false,
             mapped: false,
             field_visible: true,
@@ -237,7 +244,59 @@ impl Activity {
         }
         self.error = None;
     }
+    /// Browsing shares the fixed typing allowance, but never replaces a draft.
+    pub fn browse_older(&mut self, now: Duration) {
+        if !self.can_modify(now) || self.recall.groups.is_empty() {
+            return;
+        }
+        if self.recall.selected().is_none() {
+            self.browse_was_editing = self.editing;
+        }
+        self.recall.older(now);
+        self.pause(now);
+    }
+    pub fn browse_newer(&mut self, now: Duration) {
+        if self.recall.selected() == Some(0) {
+            self.leave_history(now);
+        } else {
+            self.recall.newer(now);
+        }
+    }
+    /// Returning to the original editor preserves text, cursor and selection.
+    pub fn leave_history(&mut self, now: Duration) -> bool {
+        if self.recall.selected().is_none() {
+            return false;
+        }
+        self.recall.clear();
+        if !self.browse_was_editing {
+            self.editing = false;
+            self.resumed_at = Some(now);
+            self.generation += 1;
+        }
+        self.error = None;
+        true
+    }
+    /// First Enter recalls; only a later Enter may submit it as a new moment.
+    pub fn recall_selected(&mut self, now: Duration) -> bool {
+        let Some(text) = self.recall.selected_text().map(str::to_owned) else {
+            return false;
+        };
+        if !self.can_modify(now) {
+            return true;
+        }
+        let mut editor = Editor::default();
+        match editor.insert(&text) {
+            Ok(true) => {
+                self.editor = editor;
+                self.recall.clear();
+                self.pause(now);
+            }
+            _ => self.error = Some("Previous reflection could not be recalled.".into()),
+        }
+        true
+    }
     pub fn insert(&mut self, text: &str, now: Duration) -> bool {
+        self.leave_history(now);
         if !self.can_modify(now) {
             return false;
         }
@@ -260,6 +319,7 @@ impl Activity {
         self.erase(now, Editor::delete);
     }
     fn erase(&mut self, now: Duration, change: fn(&mut Editor)) {
+        self.leave_history(now);
         if !self.can_modify(now) {
             return;
         }
@@ -271,6 +331,9 @@ impl Activity {
     }
     /// true means normal immediate dismissal; false means cancel and resume.
     pub fn cancel(&mut self, now: Duration) -> bool {
+        if self.leave_history(now) {
+            return false;
+        }
         if self.close_unchanged() {
             return false;
         }
@@ -281,7 +344,7 @@ impl Activity {
         false
     }
     pub fn submission(&mut self) -> Option<(u64, String)> {
-        if !self.editing {
+        if !self.editing || self.recall.selected().is_some() {
             return None;
         }
         match validate_text(self.editor.text()) {
@@ -311,6 +374,7 @@ impl Activity {
         }
     }
     fn resume(&mut self, now: Duration) {
+        self.recall.clear();
         self.editor = Editor::default();
         self.error = None;
         self.editing = false;
@@ -462,6 +526,83 @@ mod tests {
         assert_eq!(a.expired(at(23)), Some(Expiry::Normal));
     }
 
+    fn with_history() -> Activity {
+        let mut a = activity();
+        a.recall.groups = vec![
+            crate::recall::Group {
+                text: "Reviewing 🪷".into(),
+                timestamp_unix_ms: 1,
+                count: 3,
+            },
+            crate::recall::Group {
+                text: "Walking".into(),
+                timestamp_unix_ms: 0,
+                count: 1,
+            },
+        ];
+        a
+    }
+    #[test]
+    fn browsing_holds_countdown_and_enter_only_copies_before_submission() {
+        let mut a = with_history();
+        a.browse_older(at(12));
+        assert_eq!(a.remaining(at(100)), at(3));
+        assert_eq!(a.editor.text(), "");
+        assert!(a.submission().is_none());
+        a.browse_older(at(50));
+        assert_eq!(a.recall.selected_text(), Some("Walking"));
+        assert!(a.recall_selected(at(100)));
+        assert_eq!(a.editor.text(), "Walking");
+        assert_eq!(a.recall.selected(), None);
+        let (generation, text) = a.submission().unwrap();
+        a.saved(generation, &text, at(101));
+        assert_eq!(a.displayed_text(), Some("Walking"));
+        assert_eq!(a.expired(at(104)), Some(Expiry::Normal));
+    }
+    #[test]
+    fn browse_return_restores_draft_cursor_selection_and_original_timing() {
+        for typed in [false, true] {
+            let mut a = with_history();
+            if typed {
+                a.insert("My 🪷 draft", at(11));
+                a.editor.home(false);
+                a.editor.right(true);
+            }
+            let text = a.editor.text().to_owned();
+            let cursor = a.editor.cursor();
+            let selection = a.editor.selection();
+            a.browse_older(at(12));
+            a.browse_older(at(13));
+            a.browse_newer(at(14));
+            a.browse_newer(at(20));
+            assert_eq!(a.editor.text(), text);
+            assert_eq!(a.editor.cursor(), cursor);
+            assert_eq!(a.editor.selection(), selection);
+            assert_eq!(a.editing(), typed);
+            assert_eq!(a.remaining(at(21)), if typed { at(4) } else { at(2) });
+            a.browse_older(at(21));
+            assert!(!a.cancel(at(22))); // Escape exits the dial, not the draft.
+            assert_eq!(a.editor.text(), text);
+            a.browse_older(at(23));
+            assert_eq!(a.expired(at(132)), Some(Expiry::Typing));
+            assert!(a.recall_selected(at(132)));
+            assert_eq!(a.editor.text(), text); // no copy after expiry
+        }
+    }
+    #[test]
+    fn empty_history_and_expired_allowance_cannot_hold_or_renew_countdown() {
+        let mut empty = activity();
+        empty.browse_older(at(12));
+        assert!(!empty.editing());
+        assert_eq!(empty.expired(at(15)), Some(Expiry::Normal));
+        let mut a = with_history();
+        a.browse_older(at(12));
+        a.browse_newer(at(131));
+        a.browse_older(at(132));
+        assert_eq!(a.recall.selected(), None);
+        assert!(!a.editing());
+        assert_eq!(a.expired(at(134)), Some(Expiry::Normal));
+    }
     #[test]
     fn utf8_editing_selection_and_bounds() {
         let mut e = Editor::default();

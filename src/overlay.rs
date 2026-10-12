@@ -5,6 +5,7 @@ use crate::{
     config::{Settings, validate_quotes},
     guard::Guard,
     process::{Singleton, boot_time, desktop_connection},
+    recall::{self, PendingHistory},
     render,
 };
 use fontdue::Font;
@@ -58,8 +59,10 @@ Usage: naal-focus-overlay [OPTIONS]
   -h, --help           Print help
 
 WARNING: captures keyboard focus on all covered monitors. Type to reflect;
-Enter saves text locally. Typing holds the normal countdown up to the typing
-limit. Escape while typing discards and resumes; otherwise it dismisses ALL
+Up/Down browse today's previous reflections; Enter recalls, then Enter saves.
+Typing or browsing holds the normal countdown up to the typing limit. Escape
+while browsing returns to the draft; while typing discards and resumes;
+otherwise it dismisses ALL
 surfaces. Background clicks do nothing. No raw keys are logged. This is not a screen lock.
 ";
 
@@ -174,6 +177,8 @@ pub fn run(mut options: Options) -> Result<(), Box<dyn Error>> {
             Duration::from_secs(options.settings.typing_limit_secs),
         ),
         save: None,
+        pending_history: None,
+        history_unavailable: false,
         saved_entry: None,
         retry_entry: None,
         modifiers: HashMap::new(),
@@ -249,6 +254,7 @@ pub fn run(mut options: Options) -> Result<(), Box<dyn Error>> {
         event_loop.dispatch(Duration::from_millis(50), &mut app)?;
         let now = boot_time();
         app.poll_save(now);
+        app.poll_history();
         if let Some(expiry) = app.activity.expired(now) {
             app.reason = Some(match expiry {
                 Expiry::Normal => "timeout",
@@ -331,6 +337,8 @@ struct App {
     mapped_at: Option<Duration>,
     activity: Activity,
     save: Option<SaveJob>,
+    pending_history: Option<PendingHistory>,
+    history_unavailable: bool,
     saved_entry: Option<Entry>,
     retry_entry: Option<(u64, Entry)>,
     modifiers: HashMap<wl_keyboard::WlKeyboard, Modifiers>,
@@ -344,7 +352,7 @@ impl App {
         if self.save.is_some() {
             return;
         }
-        if self.activity.close_unchanged() {
+        if self.activity.recall_selected(boot_time()) || self.activity.close_unchanged() {
             return;
         }
         let Some((generation, text)) = self.activity.submission() else {
@@ -383,6 +391,20 @@ impl App {
             }
             Err(error) => self.activity.failed(generation, error),
         }
+    }
+    fn poll_history(&mut self) {
+        let Some(result) = self.pending_history.as_ref().and_then(PendingHistory::poll) else {
+            return;
+        };
+        self.pending_history = None;
+        match result {
+            Ok(history) => self.activity.recall = history,
+            Err(error) => {
+                self.history_unavailable = true;
+                eprintln!("Previous reflections unavailable: {error}");
+            }
+        }
+        self.dirty = true;
     }
     fn poll_save(&mut self, now: Duration) {
         let Some(job) = &mut self.save else {
@@ -433,15 +455,30 @@ impl App {
                 self.submit();
             }
         } else if modifiers.ctrl && matches!(event.keysym, Keysym::a | Keysym::A) {
+            self.activity.leave_history(now);
             self.activity.editor.select_all();
         } else if !modifiers.ctrl && !modifiers.alt && !modifiers.logo {
             match event.keysym {
+                Keysym::Up if !modifiers.shift => self.activity.browse_older(now),
+                Keysym::Down if !modifiers.shift => self.activity.browse_newer(now),
                 Keysym::BackSpace => self.activity.backspace(now),
                 Keysym::Delete => self.activity.delete(now),
-                Keysym::Left => self.activity.editor.left(modifiers.shift),
-                Keysym::Right => self.activity.editor.right(modifiers.shift),
-                Keysym::Home => self.activity.editor.home(modifiers.shift),
-                Keysym::End => self.activity.editor.end(modifiers.shift),
+                Keysym::Left => {
+                    self.activity.leave_history(now);
+                    self.activity.editor.left(modifiers.shift);
+                }
+                Keysym::Right => {
+                    self.activity.leave_history(now);
+                    self.activity.editor.right(modifiers.shift);
+                }
+                Keysym::Home => {
+                    self.activity.leave_history(now);
+                    self.activity.editor.home(modifiers.shift);
+                }
+                Keysym::End => {
+                    self.activity.leave_history(now);
+                    self.activity.editor.end(modifiers.shift);
+                }
                 _ => {
                     if let Some(text) = &event.utf8 {
                         self.activity.insert(text, now);
@@ -452,15 +489,21 @@ impl App {
         self.dirty = true;
     }
     fn repaint(&mut self, now: Duration) -> Result<(), Box<dyn Error>> {
+        let interval = if self.activity.recall.animating(now)
+            || self.activity.recall.animating(self.last_paint)
+        {
+            Duration::from_millis(16)
+        } else {
+            Duration::from_millis(250)
+        };
         if !self.dirty
-            && (!self.activity.field_visible()
-                || now.saturating_sub(self.last_paint) < Duration::from_millis(250))
+            && (!self.activity.field_visible() || now.saturating_sub(self.last_paint) < interval)
         {
             return Ok(());
         }
         for index in 0..self.active.len() {
             if self.active[index].mapped {
-                self.draw(index)?;
+                self.draw(index, now)?;
             }
         }
         self.last_paint = now;
@@ -469,6 +512,13 @@ impl App {
     }
     fn show(&mut self, qh: &QueueHandle<Self>, outputs: &[wl_output::WlOutput]) {
         self.requested_at = Some(boot_time());
+        match PendingHistory::start() {
+            Ok(pending) => self.pending_history = Some(pending),
+            Err(error) => {
+                self.history_unavailable = true;
+                eprintln!("Previous reflections unavailable: {error}");
+            }
+        }
         for output in outputs {
             let layer = self.layer_shell.create_layer_surface(
                 qh,
@@ -502,7 +552,7 @@ impl App {
             outputs.len()
         );
     }
-    fn draw(&mut self, index: usize) -> Result<(), Box<dyn Error>> {
+    fn draw(&mut self, index: usize, now: Duration) -> Result<(), Box<dyn Error>> {
         let active = &self.active[index];
         let scale = active.scale.clamp(1, 4) as u32;
         let width = active.size.0.checked_mul(scale).ok_or("Width overflow")?;
@@ -557,7 +607,6 @@ impl App {
                 scale as f32,
             );
         }
-        let now = boot_time();
         let saving = self
             .save
             .as_ref()
@@ -574,11 +623,21 @@ impl App {
                 progress: self.activity.typing_fraction(now),
                 message: if saving {
                     Some("Saving…")
+                } else if let Some(error) = self.activity.error.as_deref() {
+                    Some(error)
+                } else if self.history_unavailable && !self.activity.editing() {
+                    Some("Previous reflections unavailable · type to reflect")
                 } else {
-                    self.activity.error.as_deref()
+                    None
                 },
                 editing: self.activity.editing(),
-                caret_visible: (now.as_millis() / 500).is_multiple_of(2),
+                caret_visible: self.activity.recall.selected().is_none()
+                    && (now.as_millis() / 500).is_multiple_of(2),
+                history: Some(render::HistoryView {
+                    recall: &self.activity.recall,
+                    now,
+                    now_ms: recall::system_ms(),
+                }),
             },
         );
         // Seed the second buffer now, not on the user's first keystroke. This
@@ -608,8 +667,9 @@ impl App {
         if !active.mapped {
             active.mapped = true;
             if self.mapped_at.is_none() {
-                self.mapped_at = Some(now);
-                self.activity.mapped(now);
+                let mapped_now = boot_time();
+                self.mapped_at = Some(mapped_now);
+                self.activity.mapped(mapped_now);
             }
             let name = self
                 .outputs
@@ -647,7 +707,7 @@ impl LayerShellHandler for App {
     ) {
         if let Some(index) = self.active.iter().position(|a| &a.layer == layer) {
             self.active[index].size = config.new_size;
-            if let Err(e) = self.draw(index) {
+            if let Err(e) = self.draw(index, boot_time()) {
                 self.failure = Some(e.to_string());
             }
         }
@@ -668,7 +728,7 @@ impl CompositorHandler for App {
         {
             self.active[index].scale = scale;
             if self.active[index].mapped
-                && let Err(e) = self.draw(index)
+                && let Err(e) = self.draw(index, boot_time())
             {
                 self.failure = Some(e.to_string());
             }
@@ -898,7 +958,8 @@ fn pointer_input(
     if !field.contains(position.0 as f32 * scale, position.1 as f32 * scale) {
         return false;
     }
-    let mut changed = activity.open_saved(now);
+    let mut changed = activity.leave_history(now);
+    changed |= activity.open_saved(now);
     if let Some(caret) =
         font.and_then(|font| render::input_caret(font, &activity.editor, size, scale, position))
     {
@@ -996,6 +1057,45 @@ mod tests {
         }
     }
 
+    #[test]
+    fn history_rows_are_keyboard_only_and_field_click_restores_the_draft() {
+        let mut activity = Activity::new(Duration::from_secs(10), Duration::from_secs(30));
+        activity.mapped(Duration::ZERO);
+        activity.recall.groups.push(crate::recall::Group {
+            text: "Previous".into(),
+            timestamp_unix_ms: 0,
+            count: 1,
+        });
+        activity.insert("My draft", Duration::from_secs(1));
+        activity.browse_older(Duration::from_secs(2));
+        let field = render::input_rect(1920.0, 1080.0, 1.0);
+        let now = Duration::from_secs(3);
+        assert!(!pointer_input(
+            &mut activity,
+            None,
+            &press(),
+            (1920, 1080),
+            1.0,
+            (field.x as f64 + 20.0, field.y as f64 - 30.0),
+            now
+        ));
+        assert_eq!(activity.recall.selected(), Some(0));
+        assert_eq!(activity.editor.text(), "My draft");
+        assert_eq!(activity.remaining(now), Duration::from_secs(9));
+        assert!(pointer_input(
+            &mut activity,
+            None,
+            &press(),
+            (1920, 1080),
+            1.0,
+            (field.x as f64 + 20.0, field.y as f64 + 10.0),
+            now
+        ));
+        assert_eq!(activity.recall.selected(), None);
+        assert_eq!(activity.editor.text(), "My draft");
+        assert!(activity.editing());
+        assert_eq!(activity.remaining(now), Duration::from_secs(9));
+    }
     #[test]
     fn field_press_still_reopens_saved_text_and_positions_caret_without_pausing() {
         let font = render::default_font().unwrap();

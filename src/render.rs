@@ -18,7 +18,7 @@ pub fn render(
     }
     let max_width = (width as f32 * 0.8).min(1100.0 * scale);
     // Leave a quiet input area below the quote; never paint quote glyphs into it.
-    let quote_height = (height as f32 - 150.0 * scale).max(0.0);
+    let quote_height = (input_damage(width as f32, height as f32, scale).y - 20.0 * scale).max(0.0);
     let mut size = text_size;
     let mut lines = wrap(font, quote, size, max_width);
     // Fit bounded long quotes vertically; wrapping also splits unbroken words.
@@ -140,15 +140,19 @@ impl Image<'_> {
         let left = (self.width as f32 - text_width(font, text, size)) / 2.0;
         self.text_at(font, text, size, left, top, rgb);
     }
-    fn text_at(
+    fn text_at(&mut self, font: &Font, text: &str, size: f32, pen_x: f32, top: f32, rgb: [u8; 3]) {
+        self.text_at_opacity(font, text, size, (pen_x, top), rgb, 1.0);
+    }
+    fn text_at_opacity(
         &mut self,
         font: &Font,
         text: &str,
         size: f32,
-        mut pen_x: f32,
-        top: f32,
+        position: (f32, f32),
         rgb: [u8; 3],
+        opacity: f32,
     ) {
+        let (mut pen_x, top) = position;
         let baseline = top + size;
         for c in text.chars() {
             let (metrics, bitmap) = font.rasterize(c, size);
@@ -166,7 +170,8 @@ impl Image<'_> {
                     {
                         continue;
                     }
-                    let alpha = u32::from(bitmap[y * metrics.width + x]);
+                    let alpha = (f32::from(bitmap[y * metrics.width + x]) * opacity.clamp(0.0, 1.0))
+                        .round() as u32;
                     let offset = (py as usize * self.width + px as usize) * 4;
                     let dest = &mut self.canvas[offset..offset + 4];
                     let previous = u32::from_ne_bytes(dest.try_into().unwrap());
@@ -221,11 +226,12 @@ pub fn input_rect(width: f32, height: f32, scale: f32) -> Rect {
 /// Only this strip changes after each buffer's immutable quote was initialized.
 pub fn input_damage(width: f32, height: f32, scale: f32) -> Rect {
     let field = input_rect(width, height, scale);
+    let top = (field.y - 146.0 * scale).max(0.0);
     Rect {
         x: 0.0,
-        y: field.y,
+        y: top,
         width,
-        height: (field.height + 44.0 * scale).min((height - field.y).max(0.0)),
+        height: (field.y + field.height + 44.0 * scale - top).min((height - top).max(0.0)),
     }
 }
 
@@ -236,6 +242,115 @@ pub struct InputView<'a> {
     pub message: Option<&'a str>,
     pub editing: bool,
     pub caret_visible: bool,
+    pub history: Option<HistoryView<'a>>,
+}
+
+pub struct HistoryView<'a> {
+    pub recall: &'a crate::recall::Recall,
+    pub now: std::time::Duration,
+    pub now_ms: u64,
+}
+
+fn shortened(font: &Font, text: &str, size: f32, max_width: f32) -> String {
+    if text_width(font, text, size) <= max_width {
+        return text.to_owned();
+    }
+    let mut result = String::new();
+    let mut used = text_width(font, "…", size);
+    for c in text.chars() {
+        used += font.metrics(c, size).advance_width;
+        if used > max_width {
+            break;
+        }
+        result.push(c);
+    }
+    result.push('…');
+    result
+}
+
+fn render_history(
+    image: &mut Image<'_>,
+    font: &Font,
+    field: Rect,
+    scale: f32,
+    view: &HistoryView<'_>,
+) {
+    let row_height = 44.0 * scale;
+    let bottom = field.y - 14.0 * scale;
+    let full_clip = image.clip;
+    image.clip = Rect {
+        x: field.x,
+        y: (bottom - row_height * 3.0).max(0.0),
+        width: field.width,
+        height: row_height * 3.0,
+    };
+    let window = view.recall.window(view.now);
+    let start = window.floor() as usize;
+    let end = (window.ceil() as usize + 3).min(view.recall.groups.len());
+    for index in start..end {
+        let group = &view.recall.groups[index];
+        let slot = 2.0 + window - index as f32;
+        let top = bottom - row_height + (window - index as f32) * row_height;
+        let opacities = crate::recall::ROW_OPACITY.map(|value| f32::from(value) / 100.0);
+        let opacity = if slot <= 1.0 {
+            opacities[0] + (opacities[1] - opacities[0]) * slot.clamp(0.0, 1.0)
+        } else {
+            opacities[1] + (opacities[2] - opacities[1]) * (slot - 1.0).clamp(0.0, 1.0)
+        };
+        let selected = view.recall.selected() == Some(index);
+        let metadata = if selected {
+            group.label(view.now_ms)
+        } else {
+            String::new()
+        };
+        let meta_width = text_width(font, &metadata, 12.0 * scale);
+        let reserved = if selected {
+            meta_width + 16.0 * scale
+        } else {
+            0.0
+        };
+        let text = shortened(
+            font,
+            &group.text,
+            16.0 * scale,
+            (field.width - 24.0 * scale - reserved).max(0.0),
+        );
+        image.text_at_opacity(
+            font,
+            &text,
+            16.0 * scale,
+            (field.x + 12.0 * scale, top + 10.0 * scale),
+            if selected {
+                [215, 234, 221]
+            } else {
+                [192, 201, 197]
+            },
+            opacity,
+        );
+        if selected {
+            image.text_at_opacity(
+                font,
+                &metadata,
+                12.0 * scale,
+                (
+                    field.x + field.width - 12.0 * scale - meta_width,
+                    top + 13.0 * scale,
+                ),
+                [160, 170, 165],
+                opacity,
+            );
+            image.rect(
+                Rect {
+                    x: field.x,
+                    y: top + 14.0 * scale,
+                    width: scale,
+                    height: 16.0 * scale,
+                },
+                [127, 152, 140, 225],
+            );
+        }
+    }
+    image.clip = full_clip;
 }
 
 fn input_window(
@@ -314,6 +429,9 @@ pub fn render_input(
     // Clear old hints/caret/text without touching the cached quote pixels.
     image.rect(input_damage(width as f32, height as f32, scale), BACKGROUND);
     let full_clip = image.clip;
+    if let Some(history) = &view.history {
+        render_history(&mut image, font, field, scale, history);
+    }
     if let Some(text) = view.saved_text {
         let size = 16.0 * scale;
         let mut visible = String::new();
@@ -405,8 +523,22 @@ pub fn render_input(
             [145, 181, 160, 255],
         );
     }
-    let hint = view.message.unwrap_or(if view.editing {
+    let browsing = view
+        .history
+        .as_ref()
+        .is_some_and(|history| history.recall.selected().is_some());
+    let has_history = view
+        .history
+        .as_ref()
+        .is_some_and(|history| !history.recall.groups.is_empty());
+    let hint = view.message.unwrap_or(if browsing {
+        "↑ older · ↓ newer / return to draft · Enter recalls · Esc returns"
+    } else if view.editing && has_history {
+        "Enter saves · ↑ browse today's reflections · Esc discards"
+    } else if view.editing {
         "Enter saves · Esc discards · countdown resumes"
+    } else if has_history {
+        "↑ browse today's reflections · Type to reflect · Esc dismisses"
     } else {
         "Type to reflect, or just breathe · Esc dismisses"
     });
@@ -497,6 +629,7 @@ mod tests {
                 message: Some("Previous save error"),
                 editing: true,
                 caret_visible: true,
+                history: None,
             },
         );
         render_input(
@@ -512,6 +645,7 @@ mod tests {
                 message: None,
                 editing: false,
                 caret_visible: false,
+                history: None,
             },
         );
         let damage = input_damage(640.0, 480.0, 1.0);
@@ -539,11 +673,157 @@ mod tests {
                 message: None,
                 editing: true,
                 caret_visible: true,
+                history: None,
             },
         );
         assert_eq!(&pixels[offset..offset + 4], &premultiply([31, 36, 40, 235]));
     }
 
+    #[test]
+    fn history_fades_and_shows_metadata_only_for_the_highlighted_row() {
+        let font = default_font().unwrap();
+        let editor = crate::activity::Editor::default();
+        let mut recall = crate::recall::Recall::default();
+        recall.groups = (0..5)
+            .map(|_| crate::recall::Group {
+                text: "Task".into(),
+                timestamp_unix_ms: 0,
+                count: 3,
+            })
+            .collect();
+        let mut background = vec![0; 640 * 480 * 4];
+        render(&mut background, 640, 480, &font, "Notice.", 36.0, 1.0);
+        let paint = |recall: &crate::recall::Recall, now| {
+            let mut pixels = background.clone();
+            render_input(
+                &mut pixels,
+                640,
+                480,
+                &font,
+                1.0,
+                InputView {
+                    editor: &editor,
+                    saved_text: None,
+                    progress: None,
+                    message: None,
+                    editing: false,
+                    caret_visible: false,
+                    history: Some(HistoryView {
+                        recall,
+                        now,
+                        now_ms: 300_000,
+                    }),
+                },
+            );
+            let damage = input_damage(640.0, 480.0, 1.0);
+            for y in 0..damage.y as usize {
+                assert_eq!(
+                    &pixels[y * 640 * 4..(y + 1) * 640 * 4],
+                    &background[y * 640 * 4..(y + 1) * 640 * 4]
+                );
+            }
+            pixels
+        };
+        let field = input_rect(640.0, 480.0, 1.0);
+        let brightness = |pixels: &[u8], slot: usize, right: bool| -> u64 {
+            let top = (field.y - 146.0) as usize + slot * 44;
+            let left = if right {
+                (field.x + field.width - 140.0) as usize
+            } else {
+                (field.x + 12.0) as usize
+            };
+            let width = if right { 125 } else { 60 };
+            let bg = u32::from_ne_bytes(premultiply(BACKGROUND));
+            let mut total = 0;
+            for y in top..top + 44 {
+                for x in left..left + width {
+                    let offset = (y * 640 + x) * 4;
+                    let pixel = u32::from_ne_bytes(pixels[offset..offset + 4].try_into().unwrap());
+                    total += [0, 8, 16]
+                        .into_iter()
+                        .map(|shift| {
+                            ((pixel >> shift) & 255).saturating_sub((bg >> shift) & 255) as u64
+                        })
+                        .sum::<u64>();
+                }
+            }
+            total
+        };
+        let unselected = paint(&recall, std::time::Duration::ZERO);
+        assert!(brightness(&unselected, 0, false) < brightness(&unselected, 1, false));
+        assert!(brightness(&unselected, 1, false) < brightness(&unselected, 2, false));
+        assert_eq!(
+            (0..3)
+                .map(|slot| brightness(&unselected, slot, true))
+                .sum::<u64>(),
+            0
+        );
+        recall.older(std::time::Duration::ZERO);
+        let selected = paint(&recall, std::time::Duration::ZERO);
+        assert_eq!(brightness(&selected, 0, true), 0);
+        assert_eq!(brightness(&selected, 1, true), 0);
+        assert!(brightness(&selected, 2, true) > 0);
+        recall.older(std::time::Duration::ZERO);
+        for millis in [80, 160, 200] {
+            paint(&recall, std::time::Duration::from_millis(millis));
+        }
+    }
+    #[test]
+    fn history_damage_and_long_rows_fit_desktop_sizes_and_scaling() {
+        let font = default_font().unwrap();
+        let mut recall = crate::recall::Recall::default();
+        recall.groups.push(crate::recall::Group {
+            text: "é🪷".repeat(1000),
+            timestamp_unix_ms: 0,
+            count: 9999,
+        });
+        recall.older(std::time::Duration::ZERO);
+        let editor = crate::activity::Editor::default();
+        for (width, height, scale) in [(1000, 650, 1.0), (1920, 1080, 1.0), (3414, 1920, 2.0)] {
+            let field = input_rect(width as f32, height as f32, scale);
+            let damage = input_damage(width as f32, height as f32, scale);
+            assert!(damage.y >= 0.0 && damage.y + damage.height <= height as f32);
+            assert!(damage.y + 146.0 * scale <= field.y);
+            let mut pixels = vec![0; width * height * 4];
+            render(
+                &mut pixels,
+                width,
+                height,
+                &font,
+                "Notice.",
+                36.0 * scale,
+                scale,
+            );
+            render_input(
+                &mut pixels,
+                width,
+                height,
+                &font,
+                scale,
+                InputView {
+                    editor: &editor,
+                    saved_text: None,
+                    progress: None,
+                    message: None,
+                    editing: true,
+                    caret_visible: false,
+                    history: Some(HistoryView {
+                        recall: &recall,
+                        now: std::time::Duration::ZERO,
+                        now_ms: 300_000,
+                    }),
+                },
+            );
+            for pixel in pixels.chunks_exact(4) {
+                let pixel = u32::from_ne_bytes(pixel.try_into().unwrap());
+                assert!(
+                    [0, 8, 16]
+                        .into_iter()
+                        .all(|shift| (pixel >> shift) & 255 <= pixel >> 24)
+                );
+            }
+        }
+    }
     #[test]
     fn input_progress_and_long_text_render_in_bounds() {
         let font = default_font().unwrap();
@@ -566,6 +846,7 @@ mod tests {
                 message: None,
                 editing: true,
                 caret_visible: true,
+                history: None,
             },
         );
         let field = input_rect(320.0, 240.0, 1.0);

@@ -236,6 +236,15 @@ pub(crate) fn private_dir(directory: &Path) -> Result<File, String> {
 /// directory or history is an empty history, not an error. Sharing the
 /// writer's lock keeps a partial append or correction out of a scan.
 pub fn load_lenient(directory: &Path) -> Result<(Vec<Entry>, usize), String> {
+    load_lenient_matching(directory, |_| true)
+}
+
+/// Filter during scanning so a reminder retains only today's records, not an
+/// entire archive. Like `load_lenient`, this must run off the input thread.
+pub(crate) fn load_lenient_matching(
+    directory: &Path,
+    keep: impl Fn(&Entry) -> bool,
+) -> Result<(Vec<Entry>, usize), String> {
     let dir = match OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
@@ -274,11 +283,22 @@ pub fn load_lenient(directory: &Path) -> Result<(Vec<Entry>, usize), String> {
             break;
         }
         if line.len() as u64 > MAX_RECORD_BYTES {
-            // Drain the rest of the oversized line without storing it.
-            let mut rest = Vec::new();
-            reader
-                .read_until(b'\n', &mut rest)
-                .map_err(|e| e.to_string())?;
+            // Drain in bounded chunks. A newline already in the bounded prefix
+            // belongs to this line; never accidentally drain the next good row.
+            if line.last() != Some(&b'\n') {
+                loop {
+                    let chunk = reader.fill_buf().map_err(|e| e.to_string())?;
+                    if chunk.is_empty() {
+                        break;
+                    }
+                    let end = chunk.iter().position(|byte| *byte == b'\n');
+                    let consumed = end.map_or(chunk.len(), |index| index + 1);
+                    reader.consume(consumed);
+                    if end.is_some() {
+                        break;
+                    }
+                }
+            }
             skipped += 1;
             continue;
         }
@@ -291,6 +311,7 @@ pub fn load_lenient(directory: &Path) -> Result<(Vec<Entry>, usize), String> {
             .ok()
             .filter(|record: &Entry| record.version == 1 && validate_text(&record.text).is_ok());
         match record {
+            Some(record) if !keep(&record) => {}
             Some(record) if record.id.is_empty() => entries.push(record),
             Some(record) if seen.insert(record.id.clone()) => entries.push(record),
             _ => skipped += 1,
@@ -721,6 +742,57 @@ mod tests {
         assert_eq!(load_lenient(&empty).unwrap(), (Vec::new(), 0));
     }
 
+    #[test]
+    fn oversized_scan_lines_are_bounded_and_do_not_swallow_following_records() {
+        let temp = Temp::new();
+        let good = entry("Good");
+        let mut bytes = vec![b'x'; MAX_RECORD_BYTES as usize];
+        bytes.push(b'\n'); // newline is exactly the last byte of the bounded prefix
+        bytes.extend(serde_json::to_vec(&good).unwrap());
+        bytes.push(b'\n');
+        bytes.extend(vec![b'x'; MAX_RECORD_BYTES as usize * 4]);
+        bytes.push(b'\n');
+        let other = entry("Other");
+        bytes.extend(serde_json::to_vec(&other).unwrap());
+        bytes.push(b'\n');
+        fs::write(temp.0.join("activity.jsonl"), bytes).unwrap();
+        assert_eq!(load_lenient(&temp.0).unwrap(), (vec![good, other], 2));
+    }
+    #[test]
+    fn filtered_recall_scan_keeps_only_matching_records_without_modifying_history() {
+        let temp = Temp::new();
+        let old = entry("Yesterday");
+        let mut today = entry("Today 🪷");
+        today.timestamp_unix_ms = 86_400_000;
+        append_in(&temp.0, &old).unwrap();
+        append_in(&temp.0, &today).unwrap();
+        let path = temp.0.join("activity.jsonl");
+        OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap()
+            .write_all(b"malformed\n")
+            .unwrap();
+        let before = fs::read(&path).unwrap();
+        let (entries, skipped) =
+            load_lenient_matching(&temp.0, |entry| entry.timestamp_unix_ms >= 86_400_000).unwrap();
+        assert_eq!(entries, [today]);
+        assert_eq!(skipped, 1);
+        assert_eq!(fs::read(&path).unwrap(), before);
+    }
+    #[test]
+    fn reusing_text_appends_a_new_moment_and_correction_preserves_the_past() {
+        let temp = Temp::new();
+        let previous = entry("Reviewing proposal");
+        append_in(&temp.0, &previous).unwrap();
+        let reused = Entry::submitted(&previous.text).unwrap();
+        assert_ne!(reused.id, previous.id);
+        assert!(reused.timestamp_unix_ms > previous.timestamp_unix_ms);
+        append_in(&temp.0, &reused).unwrap();
+        let corrected = reused.corrected("Reviewing updated proposal").unwrap();
+        persist_in(&temp.0, Some(&reused), &corrected).unwrap();
+        assert_eq!(load_lenient(&temp.0).unwrap().0, [previous, corrected]);
+    }
     #[test]
     fn lenient_scan_refuses_links_foreign_owners_and_writers() {
         let temp = Temp::new();

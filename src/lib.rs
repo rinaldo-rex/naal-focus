@@ -8,5 +8,6 @@ pub mod engine;
 pub mod guard;
 pub mod overlay;
 pub mod process;
+pub mod recall;
 pub mod render;
 pub mod schedule;
