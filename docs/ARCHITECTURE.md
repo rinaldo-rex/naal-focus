@@ -24,12 +24,13 @@ flowchart TD
 | Renderer (`src/render.rs`) | Rasterizes text into shared-memory ARGB8888 buffers using a local font; caches the quote and repaints only the history/input strip during editing and dial motion. |
 | Reflection state (`src/activity.rs`) | Pure UTF-8 editor, held/resumed countdown, fixed typing allowance, and accepted-text/correction state. |
 | Activity history (`src/activity_log.rs`) | Private JSON-lines records, durable worker acknowledgments, idempotent retries, and atomic corrections. |
-| Reflection recall (`src/recall.rs`) | Read-only worker loads today's records; pure consecutive grouping, keyboard dial selection, relative labels, and shared rolling animation. |
+| Metadata (`src/metadata.rs`) | Shared explicit mention parsing, normalized per-kind values, and history vocabulary lookup. |
+| Reflection recall (`src/recall.rs`) | Read-only worker loads today's records and the archive vocabulary; pure consecutive grouping, keyboard dial selection, relative labels, and shared rolling animation. |
 | Dashboard (`src/dashboard.rs`, `src/dashboard_page.html`) | Pure generation of the self-contained activity page, private writer, and detached browser open. |
 | Settings (`src/config.rs`) | Validates preferences and quote syntax; loads and atomically saves JSON. |
 | Process boundaries (`src/process.rs`) | Desktop compositor routing, runtime locks, boot-time clock, and helper cleanup. |
 
-The supervisor sends one selected quote to the helper as bounded UTF-8 on stdin, rather than placing quote text in process arguments. The helper creates coordinated overlays with one shared reflection state. Only Enter-submitted text is persisted; raw keys are never recorded. Escape cancels a draft before ordinary dismissal; background clicks never cancel or dismiss; timeout, compositor closure, or output hotplug dismisses all surfaces.
+The supervisor sends one selected quote to the helper as bounded UTF-8 on stdin, rather than placing quote text in process arguments. The helper creates coordinated overlays with one shared reflection state. Only Enter-submitted text and its explicit metadata are persisted; raw keys are never recorded. Escape cancels a draft before ordinary dismissal; background clicks never cancel or dismiss; timeout, compositor closure, or output hotplug dismisses all surfaces.
 
 ## Reflection state and persistence
 
@@ -39,7 +40,9 @@ The helper owns the log worker; there is no new supervisor storage protocol. One
 
 Generation tokens keep late save results from erasing a newer draft. Canceling does not undo a write already explicitly submitted. The input/render loop only polls the worker and continues checking safety; a stalled filesystem must not strand keyboard focus.
 
-At reminder opening, a separate worker scans history with the existing read-only owner/link/lock guards, filtering while scanning so only current-local-day records are retained. Future timestamps are excluded; valid records are stably sorted by timestamp and only consecutive identical texts are grouped. Missing history is empty; unreadable/busy history leaves input and safety checks active with an unavailable hint. The resulting snapshot is shared across all outputs. Browsing never modifies the editor; exiting restores its caret/selection and prior writing state. Enter recalls into the editor, not persistence; the next Enter uses the existing new-entry submission path. Corrections still apply only to this reminder's saved entry, never the recalled historical source.
+At reminder opening, a separate worker scans history with the existing read-only owner/link/lock guards, filtering while scanning so only current-local-day records are retained. Future timestamps are excluded; valid records are stably sorted by timestamp and only consecutive identical texts are grouped. Missing history is empty; unreadable/busy history leaves input and safety checks active with an unavailable hint. The same scan collects unique tag/project/feeling vocabulary from all nonfuture valid records, while retaining only today’s full entries. The resulting snapshot is shared across all outputs. Browsing never modifies the editor; exiting restores its caret/selection and prior writing state. Enter recalls into the editor, not persistence; the next Enter uses the existing new-entry submission path. Corrections still apply only to this reminder's saved entry, never the recalled historical source.
+
+Live metadata pills and caret-local completion use the same parser as persistence and the dashboard. Suggestions replace the history area temporarily; arrows select, Tab inserts, Escape closes suggestions, and Enter retains its save behavior. Completion uses the editor’s existing character bound and fixed typing deadline. New records carry normalized metadata alongside untouched text; old records derive it on read. Corrections recalculate it, and readers/writers reject metadata that disagrees with its text.
 
 Each output reuses two buffers with identical cached quote content. The reserved history/input/status strip is repainted and damaged for text changes, dial animation, caret blinking, or progress; quote pixels remain cached and outside that damage. The same monotonic animation time is used across outputs. Both buffers are initialized before normal typing begins; a compositor that stops releasing them cannot cause an unbounded allocation queue.
 
@@ -51,7 +54,7 @@ Generation is a pure module — parsed entries, one timestamp, and a time-zone c
 
 The applet only polls the dashboard worker from its existing tick; blocking filesystem work never freezes the popup controls. Failures surface as the popup status line, never as a crash of the panel process. The output file is written privately (0600, owner-only) with the same symlink/hardlink refusals as `activity.jsonl`, replacing any earlier generation in place.
 
-Statistics claim nothing the history does not contain: counts, times of day, day presence, and explicit `#tag` vocabulary derive from timestamps and text; durations and hours worked are never claimed because writing duration is never measured. Weeks run Monday through Sunday; the year map covers the current calendar year; days after today render as blank squares rather than zero counts. Malformed lines are skipped individually and reported in a quiet footnote; an unreadable history renders a restrained error page instead of a misleading empty one.
+Statistics claim nothing the history does not contain: counts, times of day, day presence, and explicit tag/project/feeling vocabulary derive from timestamps and text; durations and hours worked are never claimed because writing duration is never measured. Weeks run Monday through Sunday; the year map covers the current calendar year; days after today render as blank squares rather than zero counts. Malformed lines are skipped individually and reported in a quiet footnote; an unreadable history renders a restrained error page instead of a misleading empty one.
 
 ## One timer across multiple instances
 

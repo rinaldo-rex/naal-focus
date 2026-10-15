@@ -66,15 +66,23 @@ The overlay has one shared reflection across all covered monitors. Its single-li
 - Empty submissions are rejected. Failed saves retain the draft and display an error while the safety deadline stays active. Clearing all text is not a save or cancellation.
 - Cancellation is not Undo for a submission already initiated with Enter: an in-flight explicit save can complete. Unsaved drafts are never stored automatically.
 
+### Inline tags, projects, and feelings
+
+Type `#tag`, `@project`, or `??feeling` anywhere in a reflection, for example `Reviewing @naal #rust ??focused`. Live pills above the field reflect the current text, including a word still being typed. Edit or remove the inline mention to update its pill. Saved reflections also show these pills. Pills stay in one row; long values shorten visually and excess pills become `+N` without losing data.
+
+Values use Unicode letters, numbers, and combining marks, plus `_` and `-`; trailing `_`/`-` is ignored. Use `@deep_work` for a multiword project. Values are lowercased and deduplicated separately for each kind. Projects start at the beginning of text or after whitespace/opening punctuation (`(`, `[`, `{`, `,`, `:`, `;`), so ordinary email addresses and URL paths are not project mentions. Feelings require a word boundary before `??`; an ordinary `why??` is punctuation. Tags retain the existing explicit `#word` parsing.
+
+While the caret is inside a mention, up to five matching saved values appear alphabetically, including values from earlier days and legacy logs. An exact normalized match needs no suggestion. **↑ / ↓** selects a suggestion, **Tab** replaces the active mention (including its suffix after the caret), and **Enter** always saves the reflection as written. Completing at the end adds a space. Suggestions temporarily replace the recall dial; **Esc** closes them without discarding text, after which arrows browse history and a further Esc follows the usual cancellation rules. New values need no separate creation step: save a reflection to add them to the vocabulary. No built-in feeling list or inferred metadata is used. Suggestion selection does not pause or extend time; accepting one is a normal edit under the same fixed typing allowance. All outputs share one suggestion selection and editor.
+
 History lives at `$HOME/.naal-focus/activity.jsonl`, independent of XDG configuration and install prefix. `HOME` must be absolute. The directory is private (0700) and the file is private (0600), owned by the current user; symlink/hardlink targets are refused. No cloud, accounts, application monitoring, raw key history, or writing-duration measurement is involved.
 
-Each JSON line is a versioned record with an opaque identity, UTC Unix timestamp in milliseconds, and submitted text:
+Each JSON line is a versioned record with an opaque identity, UTC Unix timestamp in milliseconds, submitted text, and explicit metadata:
 
 ```json
-{"version":1,"id":"0123456789abcdef0123456789abcdef","timestamp_unix_ms":1791100000000,"text":"Reviewing documentation."}
+{"version":1,"id":"0123456789abcdef0123456789abcdef","timestamp_unix_ms":1791100000000,"text":"Reviewing @naal #rust ??focused","metadata":{"tags":["rust"],"projects":["naal"],"feelings":["focused"]}}
 ```
 
-New entries append; corrections atomically replace the matching entry while preserving other records. Retries with the same identity/payload are idempotent. Earlier version-1 records without an ID remain readable and are preserved. Malformed, incomplete, oversized, or unsupported-version history is not silently truncated or overwritten: repair it before retrying.
+New entries append; corrections atomically replace the matching entry while preserving other records. Retries with the same identity/payload are idempotent. Earlier version-1 records without an ID or metadata remain readable and are preserved; metadata for those entries is derived from their text without rewriting the file. Corrections recompute metadata and preserve the ID/timestamp. Records are bounded at 32 KiB, including JSON overhead and metadata. Malformed, incomplete, oversized, or unsupported-version history is not silently truncated or overwritten: repair it before retrying.
 
 ## Activity dashboard
 
@@ -82,11 +90,11 @@ New entries append; corrections atomically replace the matching entry while pres
 
 The page is fully self-contained: no remote assets, fonts, or network requests. Every reflection is embedded as escaped JSON and rendered as plain text, never as markup or script. Views switch in place and stay deep-linkable by hash (`#day`, `#month`):
 
-- **Overview** — a calendar-year day map (one square per day, intensity by reflection count; days after today stay blank), weekly attention share of *tagged* reflections below it (weeks without tagged reflections are omitted, never inferred), and side panels for tag counts and the day-presence streak with per-week circles, the longest run, and a days-logged fraction phrased gently. Quiet days are normal; nothing counts them as failure.
+- **Overview** — a calendar-year day map (one square per day, intensity by reflection count; days after today stay blank), weekly attention share of *tagged* reflections below it (weeks without tagged reflections are omitted, never inferred), and side panels for tag, project, and feeling counts and the day-presence streak with per-week circles, the longest run, and a days-logged fraction phrased gently. Quiet days are normal; nothing counts them as failure.
 - **Day** — the day's reflections on a timeline (12-hour clock times like `11:04 AM`, or a **Relative** toggle like `43 mins ago`), with explicit quiet markers closing the gaps and a 24-hour day dial (midnight top, noon bottom, pins at true minutes, an 8 AM–6 PM band). ‹ › walks days; year-map squares open the day they represent.
 - **Month** — a calendar with weekend shading, today outlined, per-day counts and tag dots, multi-tag **OR** filter chips (non-matching days dim and become unclickable), and a detail panel for the selected day.
 
-Only documented history fields are used: counts, times of day, day presence, and explicit `#tag` vocabulary (case-insensitive, deduplicated per entry). Writing duration is never measured, so the dashboard never presents durations, hours worked, or coverage as facts; missing entries are silence, not inactivity. Tags come solely from `#words` in submitted text — nothing is inferred.
+Only documented history fields are used: counts, times of day, day presence, and explicit tags, projects, and feelings (case-insensitive, deduplicated per entry). Writing duration is never measured, so the dashboard never presents durations, hours worked, or coverage as facts; missing entries are silence, not inactivity. Tags, projects, and feelings come solely from explicit inline mentions — nothing is inferred. Project and feeling overview counts cover the saved history; day and month detail rows show all three types. Month filtering and attention-share charts continue to use tags.
 
 **Download HTML** on the page saves a self-contained copy of the dashboard that keeps working offline, since all data is embedded. The footer notes the generation time, reflection count, and any skipped lines. Missing or empty history shows a friendly empty state explaining how the first reflection lands there — no fake numbers. Malformed history lines are skipped individually and reported in that footnote; an unreadable history opens a restrained error page instead of a misleading empty one, and the applet keeps running with its history unchanged.
 
@@ -146,7 +154,7 @@ This is not a screen lock. Compositor shortcuts can still work; focus restoratio
 |---|---|
 | `src/applet.rs`, `src/applet/` | Quick popup, grouped settings draft, desktop launch and single-window activation |
 | `src/config.rs` | Settings, quote parsing/formatting, persistence |
-| `src/activity.rs`, `src/activity_log.rs`, `src/recall.rs` | Reflection editing/countdowns, private history and atomic corrections, today's grouped recall dial |
+| `src/activity.rs`, `src/activity_log.rs`, `src/recall.rs`, `src/metadata.rs` | Reflection editing/countdowns, private history and atomic corrections, today's grouped recall dial, shared metadata parsing and completion |
 | `src/dashboard.rs`, `src/dashboard_page.html` | Pure activity-dashboard generation, private writer, detached browser open |
 | `src/schedule.rs` | Scheduling, snooze, quote rotation |
 | `src/engine.rs`, `src/guard.rs`, `src/process.rs` | Shared controls, safety, supervision |

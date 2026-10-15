@@ -27,13 +27,15 @@ All monitor popups share the same settings and timer. Updates preserve existing 
 
 The quiet textbox is ready for typing without a click. Typing holds the normal countdown; **Enter** saves locally and resumes the remaining time. Saved text replaces the textbox—click it to correct the same entry. Clicking alone does not pause the countdown; changing text does.
 
+Add `#tags`, `@projects`, and `??feelings` inline (for example, `Reviewing @naal #rust ??focused`). Pills appear above the textbox as you type. Existing values autocomplete from your saved history: **↑ / ↓** select, **Tab** inserts, and **Enter** saves the text as written. **Esc** closes suggestions first; history browsing returns when suggestions are closed. Values are case-insensitive and may use letters, numbers, `_`, and `-`.
+
 Three faded rows above the textbox show today's previous reflections, grouping consecutive repeats. **↑ / ↓** roll through the day's history without replacing your draft; only the highlighted row shows its age and repeat count. **Enter** copies the selected text into the textbox; edit if needed, then **Enter again** saves a new moment. **↓ past the newest** or **Esc** returns to your draft. Browsing shares the fixed typing allowance; simply displaying history does not pause the countdown.
 
 Set **Typing time limit** under **Settings… → Reflection** (default two minutes, adjustable from 30 seconds to ten minutes). A subtle underline shows time remaining while writing. Doing nothing preserves the normal reminder timeout.
 
-Logs stay private at `~/.naal-focus/activity.jsonl`. Only submitted text and its timestamp are recorded; no raw keystrokes or writing duration.
+Logs stay private at `~/.naal-focus/activity.jsonl`. Only submitted text, its explicit metadata, and its timestamp are recorded; no raw keystrokes or writing duration.
 
-Open **Dashboard…** from the popup for a local view of that history: a self-contained HTML page regenerated fresh on every open, with a year day map, day timeline with a 24-hour dial, and a month calendar with tag filtering. It stays offline and private — no remote assets, escaped text only — and **Download HTML** on the page saves an offline copy. See the [activity reference](docs/REFERENCE.md#activity-dashboard) for details.
+Open **Dashboard…** from the popup for a local view of that history: a self-contained HTML page regenerated fresh on every open, with a year day map, day timeline with a 24-hour dial, and a month calendar with tag filtering. Project and feeling counts appear in the overview; all three metadata types appear beside reflections. It stays offline and private — no remote assets, escaped text only — and **Download HTML** on the page saves an offline copy. See the [activity reference](docs/REFERENCE.md#activity-dashboard) for details.
 
 ## Quotes
 

@@ -46,6 +46,19 @@ cargo test --locked
 
 ## Latest recorded verification
 
+### Inline metadata and autocomplete (issue #6)
+
+Checked on **2026-10-15**:
+
+- `RUST_TEST_THREADS=1 just check`: formatting, warnings-denied Clippy, **92 applet-enabled unit tests**, and shell syntax passed. Parallel runs exposed intermittent `Activity history is busy` failures in existing persistence tests; each passed alone. The suite already documents brief CLOEXEC descriptor inheritance across parallel process launches in its singleton test, so the final run used one test thread without changing production locking.
+- Parser/storage coverage includes independent case-insensitive tag/project/feeling values, legacy records, Unicode combining marks and lowercase expansion, matching metadata validation, atomic corrections, and the maximum reflection length. Vocabulary tests include earlier days while excluding future records and retaining only today's full recall entries.
+- Editor coverage includes caret-local completion for all three kinds, whole-token replacement inside a sentence, selection exclusion, suggestion dismissal without cancellation, character limits, and preservation of the original typing deadline. Enter never automatically inserts a suggestion.
+- Offscreen native rendering checked pills, suggestions, overflow, clipping, cached quote preservation, and premultiplied pixels at 1000×650 and 1920×1080 (scale 1), and 3414×1920 physical pixels (1707×960 logical, scale 2). Native sample frames at 1000×650 and scale 2 were visually inspected. No overlay was opened.
+- A generated dashboard fixture was checked in the collaborative desktop browser at 1280×800: project/feeling overview counts, all three metadata pill kinds in day and month details, and no horizontal page overflow. Long metadata values (650 characters per kind) also stayed within the day timeline. The browser console was clean.
+- Read-only `just probe` reported ready guards and DP-1 / HDMI-A-1 (1920×1080, scale 1) plus eDP-1 (1707×960 logical, scale 2). No surfaces were created or keyboard focus captured.
+
+**Still unverified live:** suggestion key routing, first-Escape behavior, pill updates while typing, and synchronized suggestion selection across monitors. No installation or changes to real history/settings were made.
+
 ### Reflection recall dial (issue #8)
 
 Checked on **2026-10-12** against feature revision `55b7c464`:
@@ -171,6 +184,7 @@ HOME="$test_home" ./target/debug/naal-focus-overlay --once --all --delay-secs 15
 |---|---|
 | All-monitor presentation | Every connected monitor dims; one quote is readable across the tested screen sizes and scales. |
 | No-input timeout | Without typing, no log is created and every overlay disappears after the normal duration. |
+| Metadata and autocomplete | Type `Review @naal #rust ??focused`: pills update immediately, including partial words. Delete/edit a mention and verify its pill updates. Save, reopen, correct, and confirm one ID/timestamp with recomputed metadata. With earlier-day vocabulary, type each marker; arrows select matching values and Tab inserts without extending the deadline. Enter saves as written. Esc closes suggestions first, then restores history navigation/cancellation. Check Unicode, long/overflowing values, caret-in-middle replacement, and identical suggestions on every output. |
 | Reflection recall dial | Today's previous groups appear in a three-row fading window (70/40/20); only the highlighted bottom row shows latest age/count. ↑ selects newest then rolls older groups down; ↓ reverses without wrapping or crossing yesterday. Enter only copies into the input; another Enter saves a new timestamp/ID. Type a draft and browse: ↓ past newest or Esc restores its text/caret/selection. Browsing holds only the existing fixed typing budget. History/background clicks do nothing. Verify identical selection and rolling on all monitors, empty history, long rows, and local-day boundaries. |
 | Reflection input and progress | Typing works immediately and does not reach the application underneath; a fixed underline progress bar appears while the normal countdown is held. |
 | Submission and correction | Enter leaves accepted text, resumes the remaining normal countdown, and writes one private record. Clicking reopens without pausing until a text change; resaving corrects that record without changing its original timestamp. |
