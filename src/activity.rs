@@ -428,6 +428,18 @@ impl Activity {
         self.resume(now);
         false
     }
+    /// Enter reopens saved text, recalls history, or closes an unchanged editor
+    /// without saving. Only an active draft can produce a submission.
+    pub fn enter(&mut self, now: Duration) -> Option<(u64, String)> {
+        if self.expired(now).is_some()
+            || self.open_saved(now)
+            || self.recall_selected(now)
+            || self.close_unchanged()
+        {
+            return None;
+        }
+        self.submission()
+    }
     pub fn submission(&mut self) -> Option<(u64, String)> {
         if !self.editing || self.recall.selected().is_some() {
             return None;
@@ -644,6 +656,71 @@ mod tests {
     }
 
     #[test]
+    fn enter_reopens_saved_text_at_end_and_only_changes_pause_the_countdown() {
+        let mut a = activity();
+        a.insert("Reading 🪷", at(12));
+        let (id, text) = a.enter(at(13)).unwrap();
+        a.saved(id, &text, at(20));
+        let generation = a.generation();
+
+        assert!(a.enter(at(21)).is_none());
+        assert!(a.field_visible());
+        assert!(!a.editing());
+        assert_eq!(a.editor.text(), text);
+        assert_eq!(a.editor.cursor(), text.len());
+        assert!(a.editor.selection().is_empty());
+        assert_eq!(a.generation(), generation);
+        assert_eq!(a.remaining(at(22)), at(1));
+
+        a.insert(" docs", at(22));
+        assert!(a.editing());
+        assert_eq!(a.remaining(at(30)), at(1));
+        assert!(a.typing_fraction(at(30)).unwrap() < 1.0);
+        let (id, correction) = a.enter(at(30)).unwrap();
+        assert_eq!(correction, "Reading 🪷 docs");
+        a.saved(id, &correction, at(30));
+        assert_eq!(a.displayed_text(), Some("Reading 🪷 docs"));
+        assert_eq!(a.expired(at(31)), Some(Expiry::Normal));
+    }
+
+    #[test]
+    fn enter_and_escape_close_unchanged_reopened_text_without_submitting() {
+        for escape in [false, true] {
+            let mut a = activity();
+            a.insert("Reading", at(12));
+            let (id, text) = a.enter(at(13)).unwrap();
+            a.saved(id, &text, at(20));
+            assert!(a.enter(at(21)).is_none());
+            if escape {
+                assert!(!a.cancel(at(22)));
+            } else {
+                assert!(a.enter(at(22)).is_none());
+            }
+            assert_eq!(a.displayed_text(), Some("Reading"));
+            assert!(!a.field_visible());
+            assert_eq!(a.remaining(at(22)), at(1));
+            assert_eq!(a.expired(at(23)), Some(Expiry::Normal));
+            assert!(a.enter(at(23)).is_none());
+            assert!(!a.field_visible());
+        }
+    }
+
+    #[test]
+    fn enter_reopening_cannot_renew_the_original_typing_deadline() {
+        let mut a = activity();
+        a.insert("Reading", at(12));
+        let (id, text) = a.enter(at(13)).unwrap();
+        a.saved(id, &text, at(130));
+        assert!(a.enter(at(131)).is_none());
+        assert!(!a.insert(" too late", at(132)));
+        assert_eq!(a.editor.text(), "Reading");
+        assert!(!a.editing());
+        assert!(a.enter(at(132)).is_none());
+        assert_eq!(a.displayed_text(), Some("Reading"));
+        assert_eq!(a.expired(at(133)), Some(Expiry::Normal));
+    }
+
+    #[test]
     fn saved_countdown_is_not_cut_short_by_spent_typing_allowance() {
         let mut a = activity();
         a.insert("Reading", at(12));
@@ -699,10 +776,10 @@ mod tests {
         assert!(a.submission().is_none());
         a.browse_older(at(50));
         assert_eq!(a.recall.selected_text(), Some("Walking"));
-        assert!(a.recall_selected(at(100)));
+        assert!(a.enter(at(100)).is_none());
         assert_eq!(a.editor.text(), "Walking");
         assert_eq!(a.recall.selected(), None);
-        let (generation, text) = a.submission().unwrap();
+        let (generation, text) = a.enter(at(100)).unwrap();
         a.saved(generation, &text, at(101));
         assert_eq!(a.displayed_text(), Some("Walking"));
         assert_eq!(a.expired(at(104)), Some(Expiry::Normal));

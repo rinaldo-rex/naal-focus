@@ -61,6 +61,7 @@ Usage: naal-focus-overlay [OPTIONS]
 WARNING: captures keyboard focus on all covered monitors. Type to reflect;
 Up/Down browse today's previous reflections; Enter recalls, then Enter saves.
 Use #tags, @projects, and ??feelings; arrows select suggestions, Tab inserts.
+After saving, Enter reopens the reflection for correction (or click it).
 With suggestions open, Enter saves as written; Escape closes suggestions first.
 Typing or browsing holds the normal countdown up to the typing limit. Escape
 while browsing returns to the draft; while typing discards and resumes;
@@ -349,15 +350,12 @@ struct App {
     last_paint: Duration,
 }
 impl App {
-    fn submit(&mut self) {
+    fn submit(&mut self, now: Duration) {
         // One in-flight submission: repeated Enter/monitor events cannot duplicate it.
         if self.save.is_some() {
             return;
         }
-        if self.activity.recall_selected(boot_time()) || self.activity.close_unchanged() {
-            return;
-        }
-        let Some((generation, text)) = self.activity.submission() else {
+        let Some((generation, text)) = self.activity.enter(now) else {
             return;
         };
         let candidate = if let Some(original) = &self.saved_entry {
@@ -455,14 +453,13 @@ impl App {
         {
             return;
         }
-        if !self.activity.field_visible() {
-            return;
-        }
         let modifiers = self.modifiers.get(keyboard).copied().unwrap_or_default();
         if matches!(event.keysym, Keysym::Return | Keysym::KP_Enter) {
             if !repeated {
-                self.submit();
+                self.submit(now);
             }
+        } else if !self.activity.field_visible() {
+            return;
         } else if modifiers.ctrl && matches!(event.keysym, Keysym::a | Keysym::A) {
             self.activity.leave_history(now);
             self.activity.reset_completion();

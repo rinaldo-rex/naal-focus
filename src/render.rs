@@ -580,7 +580,7 @@ pub fn render_input(
         image.text(font, &visible, size, field.y + 8.0 * scale, [173, 191, 182]);
         image.text(
             font,
-            "Saved · click your reflection to edit · Esc dismisses",
+            "Saved · Enter or click to edit · Esc dismisses",
             12.0 * scale,
             field.y + field.height + 14.0 * scale,
             [150, 160, 157],
