@@ -446,7 +446,17 @@ fn supervise(
     }
 }
 
-fn helper_arguments(settings: &Settings) -> [String; 9] {
+fn helper_arguments(settings: &Settings) -> [String; 13] {
+    let categories = settings
+        .charts
+        .kinds()
+        .map(|kind| match kind {
+            crate::metadata::Kind::Project => "projects",
+            crate::metadata::Kind::Feeling => "feelings",
+            crate::metadata::Kind::Tag => "tags",
+        })
+        .collect::<Vec<_>>()
+        .join(",");
     [
         "--stdin".into(),
         "--duration-secs".into(),
@@ -457,6 +467,14 @@ fn helper_arguments(settings: &Settings) -> [String; 9] {
         settings.text_size.to_string(),
         "--idle-secs".into(),
         settings.idle_secs.to_string(),
+        "--chart-style".into(),
+        settings.charts.style.as_str().into(),
+        "--charts".into(),
+        if categories.is_empty() {
+            "none".into()
+        } else {
+            categories
+        },
     ]
 }
 
@@ -508,6 +526,30 @@ mod tests {
             helper.settings.helper_lifetime_secs(),
             settings.helper_lifetime_secs()
         );
+    }
+
+    #[test]
+    fn helper_receives_chart_style_and_every_category_combination() {
+        for style in [
+            crate::config::ChartStyle::Heatmap,
+            crate::config::ChartStyle::Treemap,
+        ] {
+            for mask in 0..8 {
+                let settings = Settings {
+                    charts: crate::config::ChartSettings {
+                        style,
+                        projects: mask & 1 != 0,
+                        feelings: mask & 2 != 0,
+                        tags: mask & 4 != 0,
+                    },
+                    ..Settings::default()
+                };
+                let helper = crate::overlay::Options::parse(helper_arguments(&settings))
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(helper.settings.charts, settings.charts);
+            }
+        }
     }
 
     #[test]

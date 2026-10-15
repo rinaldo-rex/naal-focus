@@ -2,7 +2,8 @@
 use crate::{
     activity::{Activity, Expiry},
     activity_log::{Entry, PendingSave},
-    config::{Settings, validate_quotes},
+    config::{ChartSettings, ChartStyle, Settings, validate_quotes},
+    dashboard,
     guard::Guard,
     process::{Singleton, boot_time, desktop_connection},
     recall::{self, PendingHistory},
@@ -55,6 +56,8 @@ Usage: naal-focus-overlay [OPTIONS]
   --delay-secs N       Delay before showing, 0–60 (default 0)
   --text-size N        Logical text size, 22–72 (default 36)
   --idle-secs N        Skip idle sessions, 30–3600 (default 120)
+  --chart-style STYLE  heatmap (hourly) or treemap (daily totals)
+  --charts KINDS       Comma-separated projects,feelings,tags or none (default)
   --stdin              Read one raw UTF-8 quote (including line breaks) from stdin
   -h, --help           Print help
 
@@ -95,6 +98,35 @@ impl Options {
                             .filter(|v| !v.is_empty() && !v.starts_with('-'))
                             .ok_or("--output requires a monitor name.")?,
                     )
+                }
+                "--chart-style" => {
+                    options.settings.charts.style = match args.next().as_deref() {
+                        Some("heatmap") => ChartStyle::Heatmap,
+                        Some("treemap") => ChartStyle::Treemap,
+                        _ => return Err("--chart-style requires heatmap or treemap.".into()),
+                    };
+                }
+                "--charts" => {
+                    let value = args.next().ok_or("--charts requires categories or none.")?;
+                    let mut charts = ChartSettings {
+                        style: options.settings.charts.style,
+                        ..ChartSettings::default()
+                    };
+                    if value != "none" {
+                        for category in value.split(',') {
+                            match category {
+                                "projects" => charts.projects = true,
+                                "feelings" => charts.feelings = true,
+                                "tags" => charts.tags = true,
+                                _ => {
+                                    return Err(
+                                        "--charts requires projects,feelings,tags or none.".into(),
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    options.settings.charts = charts;
                 }
                 "--duration-secs" => options.settings.duration_secs = number(&arg, args.next())?,
                 "--typing-limit-secs" => {
@@ -173,6 +205,8 @@ pub fn run(mut options: Options) -> Result<(), Box<dyn Error>> {
         font: None,
         quote: options.settings.quotes[0].clone(),
         text_size: options.settings.text_size,
+        charts: options.settings.charts.clone(),
+        chart_revision: 1,
         requested_at: None,
         mapped_at: None,
         activity: Activity::new(
@@ -313,6 +347,7 @@ struct Active {
     mapped: bool,
     keyboard_focus_observed: bool,
     buffers: Vec<Buffer>,
+    chart_versions: Vec<u64>,
     buffer_size: (u32, u32, u32),
 }
 struct SaveJob {
@@ -336,6 +371,8 @@ struct App {
     font: Option<Font>,
     quote: String,
     text_size: u32,
+    charts: ChartSettings,
+    chart_revision: u64,
     requested_at: Option<Duration>,
     mapped_at: Option<Duration>,
     activity: Activity,
@@ -397,11 +434,15 @@ impl App {
             return;
         };
         self.pending_history = None;
+        self.chart_revision += 1;
         match result {
             Ok(mut history) => {
                 // A slow history load must retain vocabulary saved meanwhile.
                 if let Some(entry) = &self.saved_entry {
                     history.vocabulary.include(entry.metadata());
+                    history
+                        .charts
+                        .upsert(entry, recall::system_ms(), dashboard::to_local);
                 }
                 self.activity.recall = history;
             }
@@ -426,6 +467,12 @@ impl App {
             Ok(()) => {
                 self.activity.saved(generation, &entry.text, now);
                 self.activity.recall.vocabulary.include(entry.metadata());
+                self.activity.recall.charts.upsert(
+                    &entry,
+                    recall::system_ms(),
+                    dashboard::to_local,
+                );
+                self.chart_revision += 1;
                 self.saved_entry = Some(entry);
                 self.retry_entry = None;
             }
@@ -513,6 +560,16 @@ impl App {
         self.dirty = true;
     }
     fn repaint(&mut self, now: Duration) -> Result<(), Box<dyn Error>> {
+        if self.charts.kinds().next().is_some()
+            && self
+                .activity
+                .recall
+                .charts
+                .advance(dashboard::to_local(recall::system_ms()))
+        {
+            self.chart_revision += 1;
+            self.dirty = true;
+        }
         let interval = if self.activity.recall.animating(now)
             || self.activity.recall.animating(self.last_paint)
         {
@@ -568,6 +625,7 @@ impl App {
                 mapped: false,
                 keyboard_focus_observed: false,
                 buffers: Vec::new(),
+                chart_versions: Vec::new(),
                 buffer_size: (0, 0, 0),
             });
         }
@@ -596,6 +654,7 @@ impl App {
         }
         if self.active[index].buffer_size != (width, height, scale) {
             self.active[index].buffers.clear();
+            self.active[index].chart_versions.clear();
             self.active[index].buffer_size = (width, height, scale);
         }
         let available = self.active[index]
@@ -612,23 +671,41 @@ impl App {
                 wl_shm::Format::Argb8888,
             )?;
             self.active[index].buffers.push(buffer);
+            self.active[index].chart_versions.push(0);
             (self.active[index].buffers.len() - 1, true)
         } else {
             // Never allocate an unbounded queue of frames if the compositor is
             // slow or stops releasing buffers during a long writing session.
             return Ok(());
         };
+        let charts_changed = self.active[index].chart_versions[buffer_index] != self.chart_revision;
         let buffer = &self.active[index].buffers[buffer_index];
         let canvas = self.pool.canvas(buffer).ok_or("Buffer is still in use")?;
         if fresh {
-            render::render(
+            render::render_with_charts(
                 canvas,
-                width as usize,
-                height as usize,
+                (width as usize, height as usize),
                 self.font.as_ref().ok_or("Font not loaded")?,
                 &self.quote,
                 self.text_size as f32 * scale as f32,
                 scale as f32,
+                &self.charts,
+            );
+        }
+        if charts_changed {
+            render::render_charts(
+                canvas,
+                (width as usize, height as usize),
+                self.font.as_ref().ok_or("Font not loaded")?,
+                scale as f32,
+                render::ChartView {
+                    settings: &self.charts,
+                    data: self
+                        .pending_history
+                        .is_none()
+                        .then_some(&self.activity.recall.charts),
+                    unavailable: self.history_unavailable,
+                },
             );
         }
         let saving = self
@@ -686,10 +763,22 @@ impl App {
                 width as i32,
                 damage.height.ceil() as i32,
             );
+            if charts_changed
+                && let Some(band) =
+                    render::chart_damage(width as f32, height as f32, scale as f32, &self.charts)
+            {
+                surface.damage_buffer(
+                    band.x.floor() as i32,
+                    band.y.floor() as i32,
+                    band.width.ceil() as i32 + 1,
+                    band.height.ceil() as i32 + 1,
+                );
+            }
         }
         buffer.attach_to(surface)?;
         active.layer.commit();
         let active = &mut self.active[index];
+        active.chart_versions[buffer_index] = self.chart_revision;
         if !active.mapped {
             active.mapped = true;
             if self.mapped_at.is_none() {
@@ -713,6 +802,7 @@ impl App {
             )?;
             canvas.copy_from_slice(&seed);
             self.active[index].buffers.push(buffer);
+            self.active[index].chart_versions.push(self.chart_revision);
         }
         Ok(())
     }
@@ -1174,6 +1264,42 @@ mod tests {
             assert!(read_stdin_quote(bad.as_bytes()).is_err());
         }
         assert!(read_stdin_quote(&[0xff][..]).is_err());
+    }
+
+    #[test]
+    fn chart_cli_requires_known_styles_and_categories() {
+        for args in [
+            vec!["--chart-style"],
+            vec!["--chart-style", "pie"],
+            vec!["--charts"],
+            vec!["--charts", ""],
+            vec!["--charts", "tags,unknown"],
+            vec!["--charts", "none,tags"],
+        ] {
+            assert!(parse(&args).is_err(), "{args:?}");
+        }
+        let selected = parse(&["--charts", "projects,tags", "--chart-style", "treemap"])
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            selected.settings.charts,
+            ChartSettings {
+                style: ChartStyle::Treemap,
+                projects: true,
+                feelings: false,
+                tags: true
+            }
+        );
+        assert_eq!(
+            parse(&["--charts", "tags", "--charts", "none"])
+                .unwrap()
+                .unwrap()
+                .settings
+                .charts
+                .kinds()
+                .count(),
+            0
+        );
     }
 
     #[test]

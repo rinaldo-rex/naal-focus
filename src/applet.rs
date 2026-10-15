@@ -1,5 +1,5 @@
 use crate::{
-    config::{self, Settings},
+    config::{self, ChartStyle, Settings},
     dashboard::PendingOpen,
     engine::{Engine, Request, Status},
 };
@@ -69,11 +69,17 @@ pub enum Message {
     TypingLimit(String),
     TextSize(String),
     IdleSecs(String),
+    ChartStyle(usize),
+    ChartProjects(bool),
+    ChartFeelings(bool),
+    ChartTags(bool),
     Quotes(widget::text_editor::Action),
     Save,
     WindowFocus { id: Id, focused: bool },
     Surface(cosmic::surface::Action<Message>),
 }
+
+const CHART_STYLES: [&str; 2] = ["Heatmap — hourly mentions", "Treemap — daily mentions"];
 
 impl App {
     fn quick_controls(&self) -> Element<'_, Message> {
@@ -152,6 +158,32 @@ impl App {
                 72,
                 Message::TextSize,
             ));
+        let charts = widget::settings::section()
+            .title("Overlay charts")
+            .add(widget::settings::item(
+                "Chart style",
+                widget::dropdown(
+                    &CHART_STYLES[..],
+                    Some(match self.form.charts.style {
+                        ChartStyle::Heatmap => 0,
+                        ChartStyle::Treemap => 1,
+                    }),
+                    Message::ChartStyle,
+                ),
+            ))
+            .add(widget::settings::item(
+                "Projects",
+                widget::toggler(self.form.charts.projects).on_toggle(Message::ChartProjects),
+            ))
+            .add(widget::settings::item(
+                "Feelings",
+                widget::toggler(self.form.charts.feelings).on_toggle(Message::ChartFeelings),
+            ))
+            .add(widget::settings::item(
+                "Tags",
+                widget::toggler(self.form.charts.tags).on_toggle(Message::ChartTags),
+            ))
+            .add(widget::text("Today’s saved mentions, not time spent. All switches off hides charts. Heatmap shows hourly counts; Treemap shows daily totals.").size(12));
         let reflection = widget::settings::section()
             .title("Reflection")
             .add(numeric_field(
@@ -180,6 +212,7 @@ impl App {
             .push(widget::text(&self.status.message))
             .push(timing)
             .push(appearance)
+            .push(charts)
             .push(reflection)
             .push(widget::button::suggested("Save settings").on_press(Message::Save))
             .push(
@@ -537,6 +570,24 @@ impl cosmic::Application for App {
             }
             Message::IdleSecs(text) => {
                 self.form.idle_secs = text;
+                self.form.dirty = true;
+            }
+            Message::ChartStyle(index) => {
+                if let Some(style) = [ChartStyle::Heatmap, ChartStyle::Treemap].get(index) {
+                    self.form.charts.style = *style;
+                    self.form.dirty = true;
+                }
+            }
+            Message::ChartProjects(enabled) => {
+                self.form.charts.projects = enabled;
+                self.form.dirty = true;
+            }
+            Message::ChartFeelings(enabled) => {
+                self.form.charts.feelings = enabled;
+                self.form.dirty = true;
+            }
+            Message::ChartTags(enabled) => {
+                self.form.charts.tags = enabled;
                 self.form.dirty = true;
             }
             Message::Quotes(action) => {

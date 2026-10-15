@@ -1,5 +1,8 @@
 use fontdue::Font;
 
+mod charts;
+pub use charts::{ChartView, chart_damage, render_charts};
+
 const BACKGROUND: [u8; 4] = [20, 23, 29, 225];
 
 /// Software ARGB8888 renderer; dimensions and text size are physical pixels.
@@ -12,13 +15,39 @@ pub fn render(
     text_size: f32,
     scale: f32,
 ) {
+    render_with_charts(
+        canvas,
+        (width, height),
+        font,
+        quote,
+        text_size,
+        scale,
+        &crate::config::ChartSettings::default(),
+    );
+}
+
+/// Initialize the immutable quote, reserving a separate chart band if enabled.
+pub fn render_with_charts(
+    canvas: &mut [u8],
+    size: (usize, usize),
+    font: &Font,
+    quote: &str,
+    text_size: f32,
+    scale: f32,
+    charts: &crate::config::ChartSettings,
+) {
+    let (width, height) = size;
     let bg = premultiply(BACKGROUND);
     for pixel in canvas.chunks_exact_mut(4) {
         pixel.copy_from_slice(&bg);
     }
     let max_width = (width as f32 * 0.8).min(1100.0 * scale);
-    // Leave a quiet input area below the quote; never paint quote glyphs into it.
-    let quote_height = (input_damage(width as f32, height as f32, scale).y - 20.0 * scale).max(0.0);
+    // Quote, charts, and the existing history/input strip never overlap.
+    let quote_bottom = chart_damage(width as f32, height as f32, scale, charts).map_or_else(
+        || input_damage(width as f32, height as f32, scale).y,
+        |rect| rect.y,
+    );
+    let quote_height = (quote_bottom - 20.0 * scale).max(0.0);
     let mut size = text_size;
     let mut lines = wrap(font, quote, size, max_width);
     // Fit bounded long quotes vertically; wrapping also splits unbroken words.
