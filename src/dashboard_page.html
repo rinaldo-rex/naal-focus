@@ -84,8 +84,8 @@ button.linklike { border: 0; background: none; color: inherit; font: inherit; pa
 .etime { font-size: 12px; color: var(--mut); padding-top: 2px; }
 .node { display: flex; justify-content: center; padding-top: 5px; }
 .node i { width: 10px; height: 10px; border-radius: 50%; background: var(--accent); border: 2px solid var(--panel); z-index: 1; }
-.etext { overflow-wrap: anywhere; }
-.chip { display: inline-block; font-size: 11px; color: var(--mut); background: var(--bg); border-radius: 99px; padding: 1px 8px; margin-left: 6px; vertical-align: 1px; }
+.etext { min-width: 0; overflow-wrap: anywhere; }
+.chip { display: inline-block; max-width: calc(100% - 6px); overflow-wrap: anywhere; font-size: 11px; color: var(--mut); background: var(--bg); border-radius: 99px; padding: 1px 8px; margin-left: 6px; vertical-align: 1px; }
 .gaprow { padding: 3px 0; }
 .gaprow .gnode { border-left: 2px dashed var(--border); height: 100%; margin-left: 12px; }
 .gaprow .gtext { font-size: 11px; color: var(--mut); letter-spacing: 0.08em; padding-top: 3px; }
@@ -369,9 +369,28 @@ button.linklike { border: 0; background: none; color: inherit; font: inherit; pa
       circles.append(circle);
     }
     streakBox.append(circles, el("p", "mut", "a quiet day is a normal day"));
-    side.append(tagsBox, streakBox);
+    side.append(tagsBox);
+    for (const [key, title, prefix] of [["projects", "Projects", "@"], ["feelings", "Feelings", "??"]]) {
+      const box = card(title);
+      const counts = new Map();
+      for (const entry of DATA.entries) for (const value of entry[key]) counts.set(value, (counts.get(value) || 0) + 1);
+      for (const [value, count] of [...counts].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))) {
+        const row = el("div", "tagrow", el("span", "tagname", prefix + value), el("span", "tagnum", String(count)));
+        row.firstChild.title = prefix + value;
+        box.append(row);
+      }
+      box.append(el("p", "mut", counts.size ? "reflections with each explicit mention" : `add ${prefix}words to a reflection`));
+      side.append(box);
+    }
+    side.append(streakBox);
     layout.append(el("div", null, yearBox, shareBox), side);
     app.append(layout);
+  }
+
+  function appendMetadata(node, entry) {
+    for (const [key, prefix] of [["tags", "#"], ["projects", "@"], ["feelings", "??"]]) {
+      for (const value of entry[key]) node.append(el("span", "chip", prefix + value));
+    }
   }
 
   function renderDay() {
@@ -409,7 +428,7 @@ button.linklike { border: 0; background: none; color: inherit; font: inherit; pa
         el("span", "etime", text),
         el("span", "node", el("i")),
         el("span", "etext", entry.text));
-      for (const tag of entry.tags) row.lastChild.append(el("span", "chip", "#" + tag));
+      appendMetadata(row.lastChild, entry);
       rail.append(row);
     });
     rail.append(quietGap());
@@ -532,7 +551,7 @@ button.linklike { border: 0; background: none; color: inherit; font: inherit; pa
       }
       for (const e of dayEntries) {
         const row = el("div", "drow", el("span", "dtime", fmt12(e.minutes)), el("span", "dtext", e.text));
-        for (const tag of e.tags) row.lastChild.append(el("span", "chip", "#" + tag));
+        appendMetadata(row.lastChild, e);
         detail.append(row);
       }
     } else {

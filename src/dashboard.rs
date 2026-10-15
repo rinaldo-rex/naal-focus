@@ -167,6 +167,8 @@ struct EntryOut {
     minutes: u32,
     text: String,
     tags: Vec<String>,
+    projects: Vec<String>,
+    feelings: Vec<String>,
 }
 #[derive(Serialize)]
 struct WeekOut {
@@ -206,12 +208,15 @@ pub fn generate(
         .iter()
         .map(|e| {
             let l = to_local(e.timestamp_unix_ms);
+            let metadata = e.metadata();
             EntryOut {
                 ms: e.timestamp_unix_ms,
                 date: date_key(&l),
                 minutes: l.hour * 60 + l.minute,
                 text: e.text.clone(),
-                tags: parse_tags(&e.text),
+                tags: metadata.tags,
+                projects: metadata.projects,
+                feelings: metadata.feelings,
             }
         })
         .collect();
@@ -566,6 +571,18 @@ mod tests {
         let start = html.find(MARKER).expect("data marker") + MARKER.len();
         let end = start + html[start..].find("</script>").expect("data end");
         serde_json::from_str(&html[start..end]).expect("embedded JSON")
+    }
+    #[test]
+    fn all_metadata_kinds_reach_the_dashboard_from_old_and_new_records() {
+        let old = entry(TODAY_MS - 1, "Review #Rust @naal ??Focused");
+        let mut new = Entry::submitted("Walk @life ??calm #outside").unwrap();
+        new.timestamp_unix_ms = TODAY_MS;
+        let payload = payload_of(&generate(&[old, new], 0, TODAY_MS, utc));
+        assert_eq!(payload["entries"][0]["tags"][0], "rust");
+        assert_eq!(payload["entries"][0]["projects"][0], "naal");
+        assert_eq!(payload["entries"][0]["feelings"][0], "focused");
+        assert_eq!(payload["entries"][1]["projects"][0], "life");
+        assert_eq!(payload["entries"][1]["feelings"][0], "calm");
     }
 
     #[test]
