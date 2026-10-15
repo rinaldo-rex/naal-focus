@@ -513,7 +513,7 @@ mod tests {
         persist_in(&temp.0, Some(&old), &corrected).unwrap();
         let (loaded, skipped) = load_lenient(&temp.0).unwrap();
         assert_eq!(skipped, 0);
-        assert_eq!(loaded, [corrected.clone()]);
+        assert_eq!(loaded.as_slice(), std::slice::from_ref(&corrected));
         assert_eq!(loaded[0].metadata().feelings, ["calm"]);
         assert!(loaded[0].metadata().projects.is_empty());
         assert_eq!(corrected.id, old.id);

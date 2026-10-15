@@ -60,6 +60,8 @@ Usage: naal-focus-overlay [OPTIONS]
 
 WARNING: captures keyboard focus on all covered monitors. Type to reflect;
 Up/Down browse today's previous reflections; Enter recalls, then Enter saves.
+Use #tags, @projects, and ??feelings; arrows select suggestions, Tab inserts.
+With suggestions open, Enter saves as written; Escape closes suggestions first.
 Typing or browsing holds the normal countdown up to the typing limit. Escape
 while browsing returns to the draft; while typing discards and resumes;
 otherwise it dismisses ALL
@@ -398,7 +400,13 @@ impl App {
         };
         self.pending_history = None;
         match result {
-            Ok(history) => self.activity.recall = history,
+            Ok(mut history) => {
+                // A slow history load must retain vocabulary saved meanwhile.
+                if let Some(entry) = &self.saved_entry {
+                    history.vocabulary.include(entry.metadata());
+                }
+                self.activity.recall = history;
+            }
             Err(error) => {
                 self.history_unavailable = true;
                 eprintln!("Previous reflections unavailable: {error}");
@@ -419,6 +427,7 @@ impl App {
         match result {
             Ok(()) => {
                 self.activity.saved(generation, &entry.text, now);
+                self.activity.recall.vocabulary.include(entry.metadata());
                 self.saved_entry = Some(entry);
                 self.retry_entry = None;
             }
@@ -433,7 +442,7 @@ impl App {
             return;
         }
         if event.keysym == Keysym::Escape {
-            if !repeated && self.activity.cancel(now) {
+            if !repeated && !self.activity.dismiss_suggestions() && self.activity.cancel(now) {
                 self.reason = Some("escape");
             }
             self.dirty = true;
@@ -456,27 +465,45 @@ impl App {
             }
         } else if modifiers.ctrl && matches!(event.keysym, Keysym::a | Keysym::A) {
             self.activity.leave_history(now);
+            self.activity.reset_completion();
             self.activity.editor.select_all();
         } else if !modifiers.ctrl && !modifiers.alt && !modifiers.logo {
             match event.keysym {
-                Keysym::Up if !modifiers.shift => self.activity.browse_older(now),
-                Keysym::Down if !modifiers.shift => self.activity.browse_newer(now),
+                Keysym::Up if !modifiers.shift => {
+                    if !self.activity.move_suggestion(false) {
+                        self.activity.browse_older(now);
+                    }
+                }
+                Keysym::Down if !modifiers.shift => {
+                    if !self.activity.move_suggestion(true) {
+                        self.activity.browse_newer(now);
+                    }
+                }
+                Keysym::Tab if !modifiers.shift => {
+                    if !repeated {
+                        self.activity.complete(now);
+                    }
+                }
                 Keysym::BackSpace => self.activity.backspace(now),
                 Keysym::Delete => self.activity.delete(now),
                 Keysym::Left => {
                     self.activity.leave_history(now);
+                    self.activity.reset_completion();
                     self.activity.editor.left(modifiers.shift);
                 }
                 Keysym::Right => {
                     self.activity.leave_history(now);
+                    self.activity.reset_completion();
                     self.activity.editor.right(modifiers.shift);
                 }
                 Keysym::Home => {
                     self.activity.leave_history(now);
+                    self.activity.reset_completion();
                     self.activity.editor.home(modifiers.shift);
                 }
                 Keysym::End => {
                     self.activity.leave_history(now);
+                    self.activity.reset_completion();
                     self.activity.editor.end(modifiers.shift);
                 }
                 _ => {
@@ -619,6 +646,8 @@ impl App {
             scale as f32,
             render::InputView {
                 editor: &self.activity.editor,
+                suggestions: &self.activity.suggestions(),
+                suggestion_index: self.activity.suggestion_index(),
                 saved_text: self.activity.displayed_text(),
                 progress: self.activity.typing_fraction(now),
                 message: if saving {
@@ -963,6 +992,7 @@ fn pointer_input(
     if let Some(caret) =
         font.and_then(|font| render::input_caret(font, &activity.editor, size, scale, position))
     {
+        activity.reset_completion();
         activity.editor.set_cursor(caret, false);
         changed = true;
     }

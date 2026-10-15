@@ -1,11 +1,12 @@
 //! Pure activity editor/countdown policy; no surfaces, disk I/O, or wall clock.
 use crate::{
     activity_log::{MAX_ACTIVITY_CHARS, validate_text},
+    metadata::active_token,
     recall::Recall,
 };
 use std::time::Duration;
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct Editor {
     text: String,
     cursor: usize,
@@ -128,6 +129,8 @@ pub struct Activity {
     typing_started: Option<Duration>,
     typing_limit: Duration,
     generation: u64,
+    completion_index: usize,
+    dismissed_completion: Option<(String, usize)>,
 }
 impl Activity {
     pub fn new(duration: Duration, typing_limit: Duration) -> Self {
@@ -145,6 +148,8 @@ impl Activity {
             typing_started: None,
             typing_limit,
             generation: 0,
+            completion_index: 0,
+            dismissed_completion: None,
         }
     }
     pub fn mapped(&mut self, now: Duration) {
@@ -155,6 +160,83 @@ impl Activity {
     }
     pub fn editing(&self) -> bool {
         self.editing
+    }
+    pub fn suggestions(&self) -> Vec<String> {
+        if !self.field_visible
+            || self.recall.selected().is_some()
+            || !self.editor.selection().is_empty()
+            || self
+                .dismissed_completion
+                .as_ref()
+                .is_some_and(|(text, cursor)| {
+                    text == self.editor.text() && *cursor == self.editor.cursor()
+                })
+        {
+            return Vec::new();
+        }
+        active_token(self.editor.text(), self.editor.cursor()).map_or_else(Vec::new, |token| {
+            self.recall
+                .vocabulary
+                .suggestions(&token, self.editor.text(), self.editor.cursor())
+        })
+    }
+    pub fn suggestion_index(&self) -> usize {
+        self.completion_index % self.suggestions().len().max(1)
+    }
+    pub fn reset_completion(&mut self) {
+        self.completion_index = 0;
+        self.dismissed_completion = None;
+    }
+    pub fn move_suggestion(&mut self, newer: bool) -> bool {
+        let count = self.suggestions().len();
+        if count == 0 {
+            return false;
+        }
+        let index = self.suggestion_index();
+        self.completion_index = if newer {
+            (index + 1) % count
+        } else {
+            (index + count - 1) % count
+        };
+        true
+    }
+    pub fn dismiss_suggestions(&mut self) -> bool {
+        if self.suggestions().is_empty() {
+            return false;
+        }
+        self.dismissed_completion = Some((self.editor.text().to_owned(), self.editor.cursor()));
+        true
+    }
+    /// Completion is an ordinary bounded edit; never resets either countdown.
+    pub fn complete(&mut self, now: Duration) -> bool {
+        let suggestions = self.suggestions();
+        let Some(value) = suggestions.get(self.suggestion_index()) else {
+            return false;
+        };
+        if !self.can_modify(now) {
+            return false;
+        }
+        let Some(token) = active_token(self.editor.text(), self.editor.cursor()) else {
+            return false;
+        };
+        let value = if token.range.end == self.editor.text().len() {
+            format!("{value} ")
+        } else {
+            value.clone()
+        };
+        let mut editor = self.editor.clone();
+        editor.set_cursor(token.range.start, false);
+        editor.set_cursor(token.range.end, true);
+        match editor.insert(&value) {
+            Ok(true) => {
+                self.editor = editor;
+                self.reset_completion();
+                self.pause(now);
+            }
+            Err(error) => self.error = Some(error),
+            _ => {}
+        }
+        true
     }
     pub fn field_visible(&self) -> bool {
         self.field_visible
@@ -288,6 +370,7 @@ impl Activity {
         match editor.insert(&text) {
             Ok(true) => {
                 self.editor = editor;
+                self.reset_completion();
                 self.recall.clear();
                 self.pause(now);
             }
@@ -302,6 +385,7 @@ impl Activity {
         }
         match self.editor.insert(text) {
             Ok(true) => {
+                self.reset_completion();
                 self.pause(now);
                 true
             }
@@ -326,6 +410,7 @@ impl Activity {
         let before = self.editor.text().to_owned();
         change(&mut self.editor);
         if self.editor.text() != before {
+            self.reset_completion();
             self.pause(now);
         }
     }
@@ -374,6 +459,7 @@ impl Activity {
         }
     }
     fn resume(&mut self, now: Duration) {
+        self.reset_completion();
         self.recall.clear();
         self.editor = Editor::default();
         self.error = None;
@@ -395,6 +481,68 @@ mod tests {
         let mut a = Activity::new(at(5), at(120));
         a.mapped(at(10));
         a
+    }
+    fn with_vocabulary() -> Activity {
+        let mut a = activity();
+        a.recall
+            .vocabulary
+            .include(crate::metadata::Metadata::parse(
+                "#café #calm @naal ??focused",
+            ));
+        a
+    }
+    #[test]
+    fn completion_replaces_only_the_active_token_and_respects_selection() {
+        let mut a = with_vocabulary();
+        a.insert("🪷 #c later @na ??fo", at(12));
+        a.editor.set_cursor("🪷 #c".len(), false);
+        assert_eq!(a.suggestions(), ["#café", "#calm"]);
+        assert!(a.move_suggestion(true));
+        assert!(a.complete(at(13)));
+        assert_eq!(a.editor.text(), "🪷 #calm later @na ??fo");
+        assert_eq!(a.editor.cursor(), "🪷 #calm".len());
+        a.editor.set_cursor("🪷 #calm later @na".len(), false);
+        a.complete(at(14));
+        assert_eq!(a.editor.text(), "🪷 #calm later @naal ??fo");
+        a.editor.end(false);
+        a.complete(at(15));
+        assert_eq!(a.editor.text(), "🪷 #calm later @naal ??focused ");
+        assert_eq!(a.remaining(at(100)), at(3));
+        assert_eq!(a.expired(at(132)), Some(Expiry::Typing));
+        a.editor.select_all();
+        assert!(a.suggestions().is_empty());
+        assert!(!a.complete(at(16)));
+    }
+    #[test]
+    fn suggestions_can_close_without_canceling_and_never_auto_save() {
+        let mut a = with_vocabulary();
+        a.insert("#c", at(12));
+        assert!(a.dismiss_suggestions());
+        assert!(a.suggestions().is_empty());
+        assert_eq!(a.editor.text(), "#c");
+        assert_eq!(a.remaining(at(100)), at(3));
+        a.insert("a", at(20));
+        assert!(!a.suggestions().is_empty());
+        assert_eq!(a.submission().unwrap().1, "#ca");
+        a.browse_older(at(21)); // empty recall does not consume arrows
+        assert!(a.complete(at(22)));
+        assert_eq!(a.editor.text(), "#café ");
+        assert!(a.displayed_text().is_none());
+        a.cancel(at(23));
+        assert!(a.editor.text().is_empty());
+    }
+    #[test]
+    fn completion_cannot_exceed_text_limit_or_renew_expired_time() {
+        let mut a = with_vocabulary();
+        let text = format!("{} #c", "x".repeat(MAX_ACTIVITY_CHARS - 3));
+        a.insert(&text, at(12));
+        assert!(a.complete(at(13)));
+        assert_eq!(a.editor.text(), text);
+        assert!(a.error.is_some());
+        a.editor.select_all();
+        a.insert("??fo", at(14));
+        assert!(!a.complete(at(132)));
+        assert_eq!(a.editor.text(), "??fo");
     }
     #[test]
     fn no_input_keeps_normal_countdown() {

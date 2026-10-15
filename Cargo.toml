@@ -19,6 +19,7 @@ smithay-client-toolkit = "=0.21.1"
 wayland-client = "=0.31.15"
 wayland-protocols = { version = "=0.32.13", features = ["client", "staging"] }
 fontdue = "=0.9.4"
+unicode-properties = { version = "=0.1.4", default-features = false, features = ["general-category"] }
 
 [dependencies.libcosmic]
 git = "https://github.com/pop-os/libcosmic"

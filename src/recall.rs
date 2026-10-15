@@ -138,6 +138,26 @@ pub(crate) fn system_ms() -> u64 {
         .min(u64::MAX as u128) as u64
 }
 
+fn load_history(
+    directory: &std::path::Path,
+    now_ms: u64,
+    to_local: impl Fn(u64) -> Local + Copy,
+) -> Result<Recall, String> {
+    let today = to_local(now_ms);
+    let mut vocabulary = Vocabulary::default();
+    let (entries, _) = activity_log::load_lenient_matching(directory, |entry| {
+        if entry.timestamp_unix_ms <= now_ms {
+            vocabulary.include(entry.metadata());
+        }
+        entry.timestamp_unix_ms <= now_ms && same_day(to_local(entry.timestamp_unix_ms), today)
+    })?;
+    Ok(Recall {
+        groups: today_groups(entries, now_ms, to_local),
+        vocabulary,
+        ..Recall::default()
+    })
+}
+
 /// Loading is optional and never blocks keyboard input, guards, or dismissal.
 pub struct PendingHistory {
     result: Receiver<Result<Recall, String>>,
@@ -146,21 +166,7 @@ impl PendingHistory {
     pub fn start() -> Result<Self, String> {
         let now_ms = system_ms();
         Self::start_with(move || {
-            let directory = activity_log::directory()?;
-            let today = dashboard::to_local(now_ms);
-            let mut vocabulary = Vocabulary::default();
-            let (entries, _) = activity_log::load_lenient_matching(&directory, |entry| {
-                if entry.timestamp_unix_ms <= now_ms {
-                    vocabulary.include(entry.metadata());
-                }
-                entry.timestamp_unix_ms <= now_ms
-                    && same_day(dashboard::to_local(entry.timestamp_unix_ms), today)
-            })?;
-            Ok(Recall {
-                groups: today_groups(entries, now_ms, dashboard::to_local),
-                vocabulary,
-                ..Recall::default()
-            })
+            load_history(&activity_log::directory()?, now_ms, dashboard::to_local)
         })
     }
     fn start_with(
@@ -207,6 +213,37 @@ mod tests {
             minute: 0,
             second: 0,
         }
+    }
+    #[test]
+    fn vocabulary_includes_older_valid_history_without_expanding_todays_dial() {
+        let path = std::env::temp_dir().join(format!(
+            "naal-vocabulary-{}-{}",
+            std::process::id(),
+            system_ms()
+        ));
+        std::fs::create_dir(&path).unwrap();
+        let entries = [
+            entry("#Old @past ??calm", 1),
+            entry("#today", 86_400_001),
+            entry("#future @future ??future", 172_800_001),
+        ];
+        let mut content = String::from("malformed\n");
+        for entry in &entries {
+            content.push_str(&serde_json::to_string(entry).unwrap());
+            content.push('\n');
+        }
+        std::fs::write(path.join("activity.jsonl"), content).unwrap();
+        let history = load_history(&path, 86_400_002, local).unwrap();
+        assert_eq!(history.groups.len(), 1);
+        assert_eq!(history.groups[0].text, "#today");
+        for (text, expected) in [("#o", "#old"), ("@", "@past"), ("??", "??calm")] {
+            let token = crate::metadata::active_token(text, text.len()).unwrap();
+            assert_eq!(
+                history.vocabulary.suggestions(&token, text, text.len()),
+                [expected]
+            );
+        }
+        std::fs::remove_dir_all(path).unwrap();
     }
     #[test]
     fn only_today_in_local_zone_grouped_consecutively_and_sorted() {

@@ -1,6 +1,7 @@
 //! Explicit inline reflection metadata, shared by storage, editor, and dashboard.
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeSet, ops::Range};
+use unicode_properties::{GeneralCategoryGroup, UnicodeGeneralCategory};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
@@ -26,7 +27,9 @@ pub struct Token {
 }
 
 fn word(c: char) -> bool {
-    c.is_alphanumeric() || matches!(c, '_' | '-')
+    c.is_alphanumeric()
+        || c.general_category_group() == GeneralCategoryGroup::Mark
+        || matches!(c, '_' | '-')
 }
 
 /// Byte ranges include trailing separators so completion replaces the whole
@@ -190,5 +193,13 @@ mod tests {
             );
         }
         assert!(active_token("#café ", "#café ".len()).is_none());
+    }
+    #[test]
+    fn combining_marks_survive_normalization_and_completion() {
+        let data = Metadata::parse("#İstanbul @நாள் ??शांत #cafe\u{301}");
+        assert_eq!(data.tags, ["i\u{307}stanbul", "cafe\u{301}"]);
+        assert_eq!(data.projects, ["நாள்"]);
+        assert_eq!(data.feelings, ["शांत"]);
+        assert_eq!(Metadata::parse(&data.labels().join(" ")), data);
     }
 }

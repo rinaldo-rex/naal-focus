@@ -226,7 +226,7 @@ pub fn input_rect(width: f32, height: f32, scale: f32) -> Rect {
 /// Only this strip changes after each buffer's immutable quote was initialized.
 pub fn input_damage(width: f32, height: f32, scale: f32) -> Rect {
     let field = input_rect(width, height, scale);
-    let top = (field.y - 146.0 * scale).max(0.0);
+    let top = (field.y - 182.0 * scale).max(0.0);
     Rect {
         x: 0.0,
         y: top,
@@ -243,6 +243,8 @@ pub struct InputView<'a> {
     pub editing: bool,
     pub caret_visible: bool,
     pub history: Option<HistoryView<'a>>,
+    pub suggestions: &'a [String],
+    pub suggestion_index: usize,
 }
 
 pub struct HistoryView<'a> {
@@ -276,7 +278,7 @@ fn render_history(
     view: &HistoryView<'_>,
 ) {
     let row_height = 44.0 * scale;
-    let bottom = field.y - 14.0 * scale;
+    let bottom = field.y - 50.0 * scale;
     let full_clip = image.clip;
     image.clip = Rect {
         x: field.x,
@@ -351,6 +353,121 @@ fn render_history(
         }
     }
     image.clip = full_clip;
+}
+
+fn render_metadata(image: &mut Image<'_>, font: &Font, field: Rect, scale: f32, text: &str) {
+    let labels = crate::metadata::Metadata::parse(text).labels();
+    let original_clip = image.clip;
+    image.clip = Rect {
+        x: field.x,
+        y: (field.y - 32.0 * scale).max(0.0),
+        width: field.width,
+        height: 26.0 * scale,
+    };
+    let mut left = field.x;
+    for (index, label) in labels.iter().enumerate() {
+        // Reserve room to report overflow rather than silently dropping pills.
+        let remaining = field.x + field.width - left;
+        let available = (remaining
+            - if index + 1 < labels.len() {
+                52.0 * scale
+            } else {
+                0.0
+            })
+        .max(0.0);
+        let label = if available < 48.0 * scale {
+            format!("+{}", labels.len() - index)
+        } else {
+            shortened(font, label, 12.0 * scale, available - 18.0 * scale)
+        };
+        let width = (text_width(font, &label, 12.0 * scale) + 18.0 * scale).min(remaining);
+        let top = field.y - 30.0 * scale;
+        // Rounded pill, painted in scanlines with the same clipping as text.
+        let radius = 10.0 * scale;
+        let height = 23.0 * scale;
+        for row in 0..height.ceil() as usize {
+            let y = row as f32 + 0.5;
+            let dy = if y < radius {
+                radius - y
+            } else {
+                (y - (height - radius)).max(0.0)
+            };
+            let inset = radius - (radius * radius - dy * dy).max(0.0).sqrt();
+            image.rect(
+                Rect {
+                    x: left + inset,
+                    y: top + row as f32,
+                    width: (width - inset * 2.0).max(0.0),
+                    height: 1.0,
+                },
+                [43, 54, 51, 240],
+            );
+        }
+        let color = if label.starts_with('@') {
+            [183, 202, 228]
+        } else if label.starts_with("??") {
+            [223, 194, 161]
+        } else {
+            [173, 207, 187]
+        };
+        image.text_at(
+            font,
+            &label,
+            12.0 * scale,
+            left + 9.0 * scale,
+            top + 4.0 * scale,
+            color,
+        );
+        left += width + 6.0 * scale;
+        if label.starts_with('+') {
+            break;
+        }
+    }
+    image.clip = original_clip;
+}
+
+fn render_suggestions(
+    image: &mut Image<'_>,
+    font: &Font,
+    field: Rect,
+    scale: f32,
+    values: &[String],
+    selected: usize,
+) {
+    let original_clip = image.clip;
+    let top = field.y - 48.0 * scale - values.len() as f32 * 26.0 * scale;
+    image.clip = Rect {
+        x: field.x,
+        y: top.max(0.0),
+        width: field.width,
+        height: (field.y - 48.0 * scale - top.max(0.0)).max(0.0),
+    };
+    for (index, value) in values.iter().enumerate() {
+        let y = top + index as f32 * 26.0 * scale;
+        image.rect(
+            Rect {
+                x: field.x,
+                y,
+                width: field.width,
+                height: 26.0 * scale,
+            },
+            if index == selected {
+                [49, 65, 58, 245]
+            } else {
+                [29, 35, 38, 240]
+            },
+        );
+        let label = shortened(font, value, 14.0 * scale, field.width - 24.0 * scale);
+        image.text_at(
+            font,
+            &label,
+            14.0 * scale,
+            field.x + 12.0 * scale,
+            y + 5.0 * scale,
+            [207, 222, 214],
+        );
+    }
+    image.clip = original_clip;
 }
 
 fn input_window(
@@ -429,9 +546,25 @@ pub fn render_input(
     // Clear old hints/caret/text without touching the cached quote pixels.
     image.rect(input_damage(width as f32, height as f32, scale), BACKGROUND);
     let full_clip = image.clip;
-    if let Some(history) = &view.history {
+    if !view.suggestions.is_empty() && view.saved_text.is_none() {
+        render_suggestions(
+            &mut image,
+            font,
+            field,
+            scale,
+            view.suggestions,
+            view.suggestion_index,
+        );
+    } else if let Some(history) = &view.history {
         render_history(&mut image, font, field, scale, history);
     }
+    render_metadata(
+        &mut image,
+        font,
+        field,
+        scale,
+        view.saved_text.unwrap_or(view.editor.text()),
+    );
     if let Some(text) = view.saved_text {
         let size = 16.0 * scale;
         let mut visible = String::new();
@@ -533,14 +666,16 @@ pub fn render_input(
         .is_some_and(|history| !history.recall.groups.is_empty());
     let hint = view.message.unwrap_or(if browsing {
         "↑ older · ↓ newer / return to draft · Enter recalls · Esc returns"
+    } else if !view.suggestions.is_empty() {
+        "↑ / ↓ suggestions · Tab inserts · Enter saves · Esc closes suggestions"
     } else if view.editing && has_history {
         "Enter saves · ↑ browse today's reflections · Esc discards"
     } else if view.editing {
-        "Enter saves · Esc discards · countdown resumes"
+        "Enter saves · #tag @project ??feeling · Esc discards"
     } else if has_history {
         "↑ browse today's reflections · Type to reflect · Esc dismisses"
     } else {
-        "Type to reflect, or just breathe · Esc dismisses"
+        "Type to reflect · #tag @project ??feeling · Esc dismisses"
     });
     let hint_size = 12.0 * scale;
     // Bound error/hint text to the output too; no submitted activity is echoed here.
@@ -578,6 +713,104 @@ pub fn default_font() -> Result<Font, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn metadata_and_suggestions_stay_inside_the_shared_desktop_damage_strip() {
+        let font = default_font().unwrap();
+        let mut activity = crate::activity::Activity::new(
+            std::time::Duration::from_secs(5),
+            std::time::Duration::from_secs(120),
+        );
+        activity.mapped(std::time::Duration::ZERO);
+        activity
+            .recall
+            .vocabulary
+            .include(crate::metadata::Metadata::parse(
+                "#rust #reading @naal ??focused",
+            ));
+        for (width, height, scale) in [(1000, 650, 1.0), (1920, 1080, 1.0), (3414, 1920, 2.0)] {
+            activity.editor = crate::activity::Editor::default();
+            activity.editor.insert("Review @naal ??focused #r").unwrap();
+            let mut pixels = vec![0; width * height * 4];
+            render(
+                &mut pixels,
+                width,
+                height,
+                &font,
+                "Take a breath.",
+                36.0 * scale,
+                scale,
+            );
+            let original = pixels.clone();
+            let suggestions = activity.suggestions();
+            render_input(
+                &mut pixels,
+                width,
+                height,
+                &font,
+                scale,
+                InputView {
+                    editor: &activity.editor,
+                    saved_text: None,
+                    progress: Some(0.5),
+                    message: None,
+                    editing: true,
+                    caret_visible: true,
+                    history: None,
+                    suggestions: &suggestions,
+                    suggestion_index: 0,
+                },
+            );
+            let damage = input_damage(width as f32, height as f32, scale);
+            assert_eq!(
+                &pixels[..damage.y as usize * width * 4],
+                &original[..damage.y as usize * width * 4]
+            );
+            let field = input_rect(width as f32, height as f32, scale);
+            for row in [-20.0, -60.0] {
+                // Pills and suggestion rows both paint.
+                let y = (field.y + row * scale) as usize;
+                let start = (y * width + field.x.ceil() as usize) * 4;
+                let end = start + field.width as usize * 4;
+                assert_ne!(&pixels[start..end], &original[start..end]);
+            }
+            for pixel in pixels.chunks_exact(4) {
+                let pixel = u32::from_ne_bytes(pixel.try_into().unwrap());
+                assert!(
+                    [0, 8, 16]
+                        .into_iter()
+                        .all(|shift| (pixel >> shift) & 255 <= pixel >> 24)
+                );
+            }
+            // Many long metadata values collapse to a bounded overflow pill.
+            activity.editor = crate::activity::Editor::default();
+            activity
+                .editor
+                .insert(
+                    &(0..25)
+                        .map(|i| format!("#long_tag_{i} @long_project_{i} ??long_feeling_{i} "))
+                        .collect::<String>(),
+                )
+                .unwrap();
+            render_input(
+                &mut pixels,
+                width,
+                height,
+                &font,
+                scale,
+                InputView {
+                    editor: &activity.editor,
+                    saved_text: None,
+                    progress: None,
+                    message: None,
+                    editing: true,
+                    caret_visible: true,
+                    history: None,
+                    suggestions: &[],
+                    suggestion_index: 0,
+                },
+            );
+        }
+    }
     #[test]
     fn input_hit_testing_scroll_and_scale_share_geometry() {
         let font = default_font().unwrap();
@@ -624,6 +857,8 @@ mod tests {
             1.0,
             InputView {
                 editor: &editor,
+                suggestions: &[],
+                suggestion_index: 0,
                 saved_text: None,
                 progress: Some(0.5),
                 message: Some("Previous save error"),
@@ -640,6 +875,8 @@ mod tests {
             1.0,
             InputView {
                 editor: &editor,
+                suggestions: &[],
+                suggestion_index: 0,
                 saved_text: Some("Reading docs"),
                 progress: None,
                 message: None,
@@ -668,6 +905,8 @@ mod tests {
             1.0,
             InputView {
                 editor: &editor,
+                suggestions: &[],
+                suggestion_index: 0,
                 saved_text: None,
                 progress: Some(0.2),
                 message: None,
@@ -703,6 +942,8 @@ mod tests {
                 1.0,
                 InputView {
                     editor: &editor,
+                    suggestions: &[],
+                    suggestion_index: 0,
                     saved_text: None,
                     progress: None,
                     message: None,
@@ -726,7 +967,7 @@ mod tests {
         };
         let field = input_rect(640.0, 480.0, 1.0);
         let brightness = |pixels: &[u8], slot: usize, right: bool| -> u64 {
-            let top = (field.y - 146.0) as usize + slot * 44;
+            let top = (field.y - 182.0) as usize + slot * 44;
             let left = if right {
                 (field.x + field.width - 140.0) as usize
             } else {
@@ -783,7 +1024,7 @@ mod tests {
             let field = input_rect(width as f32, height as f32, scale);
             let damage = input_damage(width as f32, height as f32, scale);
             assert!(damage.y >= 0.0 && damage.y + damage.height <= height as f32);
-            assert!(damage.y + 146.0 * scale <= field.y);
+            assert!(damage.y + 182.0 * scale <= field.y);
             let mut pixels = vec![0; width * height * 4];
             render(
                 &mut pixels,
@@ -802,6 +1043,8 @@ mod tests {
                 scale,
                 InputView {
                     editor: &editor,
+                    suggestions: &[],
+                    suggestion_index: 0,
                     saved_text: None,
                     progress: None,
                     message: None,
@@ -841,6 +1084,8 @@ mod tests {
             1.0,
             InputView {
                 editor: &editor,
+                suggestions: &[],
+                suggestion_index: 0,
                 saved_text: None,
                 progress: Some(0.5),
                 message: None,

@@ -3123,6 +3123,7 @@ dependencies = [
  "serde",
  "serde_json",
  "smithay-client-toolkit 0.21.1",
+ "unicode-properties",
  "wayland-client",
  "wayland-protocols",
  "zbus",
