@@ -29,7 +29,7 @@ Uninstalling also leaves `~/.naal-focus/` activity history untouched. Both scrip
 
 ## Settings and controls
 
-Click the panel/dock icon for a compact popup with status, the recurring-reminders toggle, **Show now**, **Snooze 15 min** (or **Resume** while snoozed), **Dashboard…**, and **Settings…**. Detailed preferences and quote editing live only in the dedicated settings window, grouped into **Timing**, **Appearance**, and **Reflection**. The window stays open when clicking elsewhere. Reopening settings activates the existing window rather than creating another; `naal-focus --settings` uses the same entry point.
+Click the panel/dock icon for a compact popup with status, the recurring-reminders toggle, **Show now**, **Snooze 15 min** (or **Resume** while snoozed), **Dashboard…**, and **Settings…**. Detailed preferences and quote editing live only in the dedicated settings window, grouped into **Timing**, **Appearance**, **Overlay charts**, and **Reflection**. The window stays open when clicking elsewhere. Reopening settings activates the existing window rather than creating another; `naal-focus --settings` uses the same entry point.
 
 Settings live at `$XDG_CONFIG_HOME/naal-focus/settings.json`, falling back to `~/.config/naal-focus/settings.json`. Saves are atomic. Invalid, oversized, or unsupported-version files remain untouched until explicit **Save settings** replaces them.
 
@@ -41,6 +41,8 @@ Settings live at `$XDG_CONFIG_HOME/naal-focus/settings.json`, falling back to `~
 | Typing time limit | 120 seconds | 30–600 seconds; separate from duration |
 | Text size | 36 logical pixels | 22–72 |
 | Idle threshold | 120 seconds | 30–3600 |
+| Chart style | Heatmap (hidden until a category is enabled) | Heatmap / Treemap; shared across categories |
+| Chart categories | All off | Independent Projects / Feelings / Tags switches |
 | Quotes | Four reminders | 1–100; ≤500 characters each, including line breaks |
 
 - **Save settings** applies edited fields together, cancels pending/visible reminders, and restarts the interval. The settings window follows shared saved values without overwriting unsaved edits. A failed save retains its draft.
@@ -83,6 +85,18 @@ Each JSON line is a versioned record with an opaque identity, UTC Unix timestamp
 ```
 
 New entries append; corrections atomically replace the matching entry while preserving other records. Retries with the same identity/payload are idempotent. Earlier version-1 records without an ID or metadata remain readable and are preserved; metadata for those entries is derived from their text without rewriting the file. Corrections recompute metadata and preserve the ID/timestamp. Records are bounded at 32 KiB, including JSON overhead and metadata. Malformed, incomplete, oversized, or unsupported-version history is not silently truncated or overwritten: repair it before retrying.
+
+## Overlay charts
+
+In **Settings… → Overlay charts**, choose one shared **Heatmap** or **Treemap** style and switch **Projects**, **Feelings**, and **Tags** independently. Apply with **Save settings**, like other preferences. With every switch off, the existing overlay is unchanged. Existing settings without a `charts` field also default to off.
+
+- **Heatmap**: one row per value and 24 local-hour columns, labeled `00`, `06`, `12`, `18`. Brighter cells mean more mentions in that hour; each category has its own intensity scale, stated below it. Future hours remain blank, distinct from elapsed hours with zero mentions.
+- **Treemap**: labeled tile areas reflect daily mention counts, with exact counts where space allows. Nested cuts keep the tiles readable; very small tiles and long labels are clipped/shortened visually, never in storage.
+- Values are ranked by today's count, with alphabetical ties. Each category shows at most four rows/tiles: if needed, the first three values plus **Other (N)**, which sums mentions of the remaining N values. One reflection may mention several values, so counts and tile areas are **not durations or exclusive shares of reflections**. Case variants and repeated mentions of the same value within one reflection count only once.
+- Only saved entries from the current local day up to the load time are included initially. A successful submission updates the shared charts; correcting it replaces its original metadata counts without adding another moment. Drafts, failed saves, and merely recalling text do not change counts. Missing history is empty; loading, no-mention, and unavailable states are distinct. Midnight resets chart counts, and the next reminder reloads fresh history. Changes by external writers during a reminder are not polled.
+- Enabled categories sit side by side in a reserved band above history/input, using one data snapshot across monitors. On unusually small desktop outputs, charts are omitted rather than overlapping quote/input; settings are retained. Three enabled categories fit at 800×600 logical pixels. Native keyboard, timeout, and background-click behavior are unchanged.
+
+The optional version-1 settings field is `"charts": {"style": "heatmap", "projects": false, "feelings": false, "tags": false}`; the other supported style is `"treemap"`. Manual helper tests can use `--chart-style heatmap --charts projects,feelings,tags` (or `treemap` / `none`); **launching the helper captures focus**, so use the consented procedure in the testing guide.
 
 ## Activity dashboard
 
@@ -153,7 +167,8 @@ This is not a screen lock. Compositor shortcuts can still work; focus restoratio
 | Files | Responsibility |
 |---|---|
 | `src/applet.rs`, `src/applet/` | Quick popup, grouped settings draft, desktop launch and single-window activation |
-| `src/config.rs` | Settings, quote parsing/formatting, persistence |
+| `src/config.rs` | Settings, chart preferences, quote parsing/formatting, persistence |
+| `src/charts.rs`, `src/render/charts.rs` | Local-day/hour mention aggregation, correction reconciliation, native heatmap/treemap layout |
 | `src/activity.rs`, `src/activity_log.rs`, `src/recall.rs`, `src/metadata.rs` | Reflection editing/countdowns, private history and atomic corrections, today's grouped recall dial, shared metadata parsing and completion |
 | `src/dashboard.rs`, `src/dashboard_page.html` | Pure activity-dashboard generation, private writer, detached browser open |
 | `src/schedule.rs` | Scheduling, snooze, quote rotation |

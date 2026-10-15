@@ -37,6 +37,12 @@ Logs stay private at `~/.naal-focus/activity.jsonl`. Only submitted text, its ex
 
 Open **Dashboard…** from the popup for a local view of that history: a self-contained HTML page regenerated fresh on every open, with a year day map, day timeline with a 24-hour dial, and a month calendar with tag filtering. Project and feeling counts appear in the overview; all three metadata types appear beside reflections. It stays offline and private — no remote assets, escaped text only — and **Download HTML** on the page saves an offline copy. See the [activity reference](docs/REFERENCE.md#activity-dashboard) for details.
 
+## Overlay charts
+
+Under **Settings… → Overlay charts**, choose **Heatmap** (hourly mentions) or **Treemap** (daily totals), then enable **Projects**, **Feelings**, and/or **Tags**. One style applies to all enabled categories; charts start **off**, including when upgrading.
+
+Charts show today's saved mentions, not time spent. Successful saves and corrections update them across monitors; drafts do not. Up to four values are shown per category, grouping overflow as **Other**. Charts sit above the history/input area without changing keyboard controls.
+
 ## Quotes
 
 Start each quote with an unindented `- `. Following lines belong to that quote:

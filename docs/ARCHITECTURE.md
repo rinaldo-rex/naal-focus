@@ -25,6 +25,7 @@ flowchart TD
 | Reflection state (`src/activity.rs`) | Pure UTF-8 editor, held/resumed countdown, fixed typing allowance, and accepted-text/correction state. |
 | Activity history (`src/activity_log.rs`) | Private JSON-lines records, durable worker acknowledgments, idempotent retries, and atomic corrections. |
 | Metadata (`src/metadata.rs`) | Shared explicit mention parsing, normalized per-kind values, and history vocabulary lookup. |
+| Overlay charts (`src/charts.rs`, `src/render/charts.rs`) | Shared local-day/hour mention counts and cached native heatmap/treemap rendering. |
 | Reflection recall (`src/recall.rs`) | Read-only worker loads today's records and the archive vocabulary; pure consecutive grouping, keyboard dial selection, relative labels, and shared rolling animation. |
 | Dashboard (`src/dashboard.rs`, `src/dashboard_page.html`) | Pure generation of the self-contained activity page, private writer, and detached browser open. |
 | Settings (`src/config.rs`) | Validates preferences and quote syntax; loads and atomically saves JSON. |
@@ -44,7 +45,15 @@ At reminder opening, a separate worker scans history with the existing read-only
 
 Live metadata pills and caret-local completion use the same parser as persistence and the dashboard. Suggestions replace the history area temporarily; arrows select, Tab inserts, Escape closes suggestions, and Enter retains its save behavior. Completion uses the editor’s existing character bound and fixed typing deadline. New records carry normalized metadata alongside untouched text; old records derive it on read. Corrections recalculate it, and readers/writers reject metadata that disagrees with its text.
 
-Each output reuses two buffers with identical cached quote content. The reserved history/input/status strip is repainted and damaged for text changes, dial animation, caret blinking, or progress; quote pixels remain cached and outside that damage. The same monotonic animation time is used across outputs. Both buffers are initialized before normal typing begins; a compositor that stops releasing them cannot cause an unbounded allocation queue.
+Each output reuses two buffers with identical cached quote content. The reserved history/input/status strip is repainted and damaged for text changes, dial animation, caret blinking, or progress; quote pixels remain cached and outside that damage. When charts are enabled, a separate band above that strip is reserved during quote layout. Each buffer tracks its chart revision: history completion, successful saves/corrections, and local hour/day rollover repaint and damage that band, but ordinary typing and caret motion do not rerasterize charts. The seeded second buffer inherits the first buffer's revision. The same monotonic animation time is used across outputs. Both buffers are initialized before normal typing begins; a compositor that stops releasing them cannot cause an unbounded allocation queue.
+
+## Overlay charts
+
+Chart preferences default to all categories off, preserving old version-1 settings. One shared style (hourly heatmap or daily treemap) and three independent category switches travel through existing settings synchronization and explicit helper CLI arguments; no new service or persistence format is introduced.
+
+The recall worker builds chart counts from the same filtered, read-only local-day snapshot before grouping consecutive reflection texts. Thus repeated saved moments remain separate counts. Normalized metadata is deduplicated per value per entry; no draft text or inferred duration contributes. Compact per-ID observations support replacing earlier metadata counts on correction. Reconciling this reminder's latest acknowledged entry into a late history result is an upsert, so a snapshot already containing it does not count it twice. Legacy ID-less records are counted independently. The renderer uses a bounded top-four view, merging overflow into Other without discarding mentions.
+
+Charts are noninteractive and share one aggregate snapshot across outputs. Missing history renders empty, while pending and failed reads get explicit states. Local hour rollover reveals the next heatmap column; local day rollover clears yesterday's counts. A reminder is a snapshot plus its own acknowledged writes, not a live subscription to external history writers. Unusually small desktop outputs omit the band to protect the existing quote and reflection controls. None of these states changes focus, key routing, dismissal, or watchdog policy.
 
 ## Activity dashboard
 
@@ -74,7 +83,7 @@ UI status is sampled rather than instantaneous: the owner processes its loop abo
 
 ## Quick controls and settings window
 
-The popup contains only status, immediate reminder controls, and a Settings… entry point. The separate resizable desktop window groups configuration into Timing, Appearance, and Reflection, with a native quote editor and explicit Save.
+The popup contains only status, immediate reminder controls, and a Settings… entry point. The separate resizable desktop window groups configuration into Timing, Appearance, Overlay charts, and Reflection, with a native quote editor and explicit Save.
 
 `src/applet/launch.rs` launches the same binary with `--settings`, detached from the panel lifetime. It removes nested/privileged Wayland socket variables, resets panel scaling and stale launch-token overrides, and routes `WAYLAND_DISPLAY` to the validated desktop socket. COSMIC's applet-token subscription obtains a host-compositor activation token through the privileged channel; a panel-local token cannot authorize desktop focus. The window consumes the startup token after opening, while libcosmic handles tokens forwarded over its D-Bus activation interface for an existing window.
 
