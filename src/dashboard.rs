@@ -132,35 +132,7 @@ fn clock_12(hour: u32, minute: u32) -> String {
 /// Explicit #word vocabulary: alphanumeric plus `_`/`-`, case-insensitive,
 /// duplicate-free per entry. Trailing `-`/`_` is punctuation, stripped.
 pub fn parse_tags(text: &str) -> Vec<String> {
-    fn word(c: char) -> bool {
-        c.is_alphanumeric() || c == '-' || c == '_'
-    }
-    let chars: Vec<char> = text.chars().collect();
-    let mut tags: Vec<String> = Vec::new();
-    let mut i = 0;
-    while i < chars.len() {
-        if chars[i] != '#' {
-            i += 1;
-            continue;
-        }
-        let start = i + 1;
-        let mut end = start;
-        while end < chars.len() && word(chars[end]) {
-            end += 1;
-        }
-        let mut last = end;
-        while last > start && matches!(chars[last - 1], '-' | '_') {
-            last -= 1;
-        }
-        if last > start {
-            let tag: String = chars[start..last].iter().collect::<String>().to_lowercase();
-            if !tags.contains(&tag) {
-                tags.push(tag);
-            }
-        }
-        i = end;
-    }
-    tags
+    crate::metadata::Metadata::parse(text).tags
 }
 
 #[derive(Serialize)]
@@ -583,6 +555,7 @@ mod tests {
     fn entry(ms: u64, text: &str) -> Entry {
         Entry {
             version: 1,
+            metadata: None,
             id: format!("{ms:032x}"),
             timestamp_unix_ms: ms,
             text: text.into(),

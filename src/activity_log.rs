@@ -1,4 +1,5 @@
 //! Private activity history with idempotent appends and atomic corrections.
+use crate::metadata::Metadata;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashSet,
@@ -15,7 +16,7 @@ use std::{
 };
 
 pub const MAX_ACTIVITY_CHARS: usize = 2000;
-const MAX_RECORD_BYTES: u64 = 16 * 1024;
+const MAX_RECORD_BYTES: u64 = 32 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -27,9 +28,28 @@ pub struct Entry {
     /// UTC milliseconds since the Unix epoch, captured on submission.
     pub timestamp_unix_ms: u64,
     pub text: String,
+    /// Absent in legacy records; derived from their original text on read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<Metadata>,
 }
 
 impl Entry {
+    pub fn metadata(&self) -> Metadata {
+        self.metadata
+            .clone()
+            .unwrap_or_else(|| Metadata::parse(&self.text))
+    }
+    fn validate(&self) -> Result<(), String> {
+        validate_text(&self.text)?;
+        if self
+            .metadata
+            .as_ref()
+            .is_some_and(|data| *data != Metadata::parse(&self.text))
+        {
+            return Err("Activity metadata does not match its text.".into());
+        }
+        Ok(())
+    }
     pub fn submitted(text: &str) -> Result<Self, String> {
         validate_text(text)?;
         let timestamp_unix_ms = SystemTime::now()
@@ -43,12 +63,14 @@ impl Entry {
             id: random_id()?,
             timestamp_unix_ms,
             text: text.to_owned(),
+            metadata: Some(Metadata::parse(text)),
         })
     }
     pub fn corrected(&self, text: &str) -> Result<Self, String> {
         validate_text(text)?;
         Ok(Self {
             text: text.to_owned(),
+            metadata: Some(Metadata::parse(text)),
             ..self.clone()
         })
     }
@@ -142,7 +164,7 @@ fn append_in(directory: &Path, entry: &Entry) -> Result<(), String> {
     persist_in(directory, None, entry)
 }
 fn persist_in(directory: &Path, original: Option<&Entry>, entry: &Entry) -> Result<(), String> {
-    validate_text(&entry.text)?;
+    entry.validate()?;
     if entry.id.len() != 32 || !entry.id.bytes().all(|b| b.is_ascii_hexdigit()) {
         return Err("Invalid activity identity.".into());
     }
@@ -243,7 +265,7 @@ pub fn load_lenient(directory: &Path) -> Result<(Vec<Entry>, usize), String> {
 /// entire archive. Like `load_lenient`, this must run off the input thread.
 pub(crate) fn load_lenient_matching(
     directory: &Path,
-    keep: impl Fn(&Entry) -> bool,
+    mut keep: impl FnMut(&Entry) -> bool,
 ) -> Result<(Vec<Entry>, usize), String> {
     let dir = match OpenOptions::new()
         .read(true)
@@ -309,7 +331,7 @@ pub(crate) fn load_lenient_matching(
         }
         let record: Option<Entry> = serde_json::from_slice(&line)
             .ok()
-            .filter(|record: &Entry| record.version == 1 && validate_text(&record.text).is_ok());
+            .filter(|record: &Entry| record.version == 1 && record.validate().is_ok());
         match record {
             Some(record) if !keep(&record) => {}
             Some(record) if record.id.is_empty() => entries.push(record),
@@ -366,7 +388,7 @@ fn read_record(reader: &mut impl BufRead) -> Result<Option<(Vec<u8>, Entry)>, St
     }
     let record: Entry = serde_json::from_slice(&line)
         .map_err(|_| "Activity history has a malformed record; repair it before retrying.")?;
-    validate_text(&record.text)?;
+    record.validate()?;
     if record.version != 1 {
         return Err("Unsupported activity history version.".into());
     }
@@ -470,6 +492,7 @@ mod tests {
     fn entry(text: &str) -> Entry {
         Entry {
             version: 1,
+            metadata: None,
             id: {
                 use std::hash::{Hash, Hasher};
                 let mut hash = std::collections::hash_map::DefaultHasher::new();
@@ -481,6 +504,37 @@ mod tests {
         }
     }
 
+    #[test]
+    fn metadata_round_trips_corrects_and_legacy_records_remain_readable() {
+        let temp = Temp::new();
+        let old = Entry::submitted("Review #Rust @naal ??Focused").unwrap();
+        append_in(&temp.0, &old).unwrap();
+        let corrected = old.corrected("Walk #outside ??calm").unwrap();
+        persist_in(&temp.0, Some(&old), &corrected).unwrap();
+        let (loaded, skipped) = load_lenient(&temp.0).unwrap();
+        assert_eq!(skipped, 0);
+        assert_eq!(loaded, [corrected.clone()]);
+        assert_eq!(loaded[0].metadata().feelings, ["calm"]);
+        assert!(loaded[0].metadata().projects.is_empty());
+        assert_eq!(corrected.id, old.id);
+        assert_eq!(corrected.timestamp_unix_ms, old.timestamp_unix_ms);
+        let legacy: Entry = serde_json::from_str(
+            r##"{"version":1,"timestamp_unix_ms":1,"text":"#Rust @naal ??calm"}"##,
+        )
+        .unwrap();
+        assert_eq!(
+            legacy.metadata(),
+            old.corrected(&legacy.text).unwrap().metadata()
+        );
+        let mut invalid = corrected;
+        invalid.metadata.as_mut().unwrap().feelings = vec!["invented".into()];
+        assert!(append_in(&temp.0, &invalid).is_err());
+        // The largest supported reflection must also fit the scanner after
+        // metadata duplication, including lowercase Unicode expansion.
+        let large = Entry::submitted(&format!("#{}", "İ".repeat(MAX_ACTIVITY_CHARS - 1))).unwrap();
+        append_in(&temp.0, &large).unwrap();
+        assert_eq!(load_lenient(&temp.0).unwrap().0.len(), 2);
+    }
     #[test]
     fn validates_single_line_utf8_and_timestamp() {
         for text in ["", "  ", "a\nb", "a\tb", "a\0b"] {
@@ -716,12 +770,14 @@ mod tests {
         let (entries, skipped) = load_lenient(&dir).unwrap();
         let legacy_entry = Entry {
             version: 1,
+            metadata: None,
             id: String::new(),
             timestamp_unix_ms: 10,
             text: "Legacy".into(),
         };
         let good_entry = Entry {
             version: 1,
+            metadata: None,
             id: "0123456789abcdef0123456789abcdef".into(),
             timestamp_unix_ms: 20,
             text: "Reading".into(),

@@ -3,6 +3,7 @@
 use crate::{
     activity_log::{self, Entry},
     dashboard::{self, Local},
+    metadata::Vocabulary,
 };
 use std::{
     sync::mpsc::{self, Receiver, TryRecvError},
@@ -75,6 +76,7 @@ pub fn today_groups(
 #[derive(Debug, Default)]
 pub struct Recall {
     pub groups: Vec<Group>,
+    pub vocabulary: Vocabulary,
     selected: Option<usize>,
     transition: Option<(f32, Duration)>,
 }
@@ -146,12 +148,17 @@ impl PendingHistory {
         Self::start_with(move || {
             let directory = activity_log::directory()?;
             let today = dashboard::to_local(now_ms);
+            let mut vocabulary = Vocabulary::default();
             let (entries, _) = activity_log::load_lenient_matching(&directory, |entry| {
+                if entry.timestamp_unix_ms <= now_ms {
+                    vocabulary.include(entry.metadata());
+                }
                 entry.timestamp_unix_ms <= now_ms
                     && same_day(dashboard::to_local(entry.timestamp_unix_ms), today)
             })?;
             Ok(Recall {
                 groups: today_groups(entries, now_ms, dashboard::to_local),
+                vocabulary,
                 ..Recall::default()
             })
         })
@@ -185,6 +192,7 @@ mod tests {
     fn entry(text: &str, ms: u64) -> Entry {
         Entry {
             version: 1,
+            metadata: None,
             id: String::new(),
             text: text.into(),
             timestamp_unix_ms: ms,

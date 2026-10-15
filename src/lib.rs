@@ -6,6 +6,7 @@ pub mod config;
 pub mod dashboard;
 pub mod engine;
 pub mod guard;
+pub mod metadata;
 pub mod overlay;
 pub mod process;
 pub mod recall;
