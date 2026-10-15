@@ -2,6 +2,7 @@
 //! new moment through the existing activity editor and persistence policy.
 use crate::{
     activity_log::{self, Entry},
+    charts::DailyCharts,
     dashboard::{self, Local},
     metadata::Vocabulary,
 };
@@ -77,6 +78,7 @@ pub fn today_groups(
 pub struct Recall {
     pub groups: Vec<Group>,
     pub vocabulary: Vocabulary,
+    pub charts: DailyCharts,
     selected: Option<usize>,
     transition: Option<(f32, Duration)>,
 }
@@ -152,6 +154,7 @@ fn load_history(
         entry.timestamp_unix_ms <= now_ms && same_day(to_local(entry.timestamp_unix_ms), today)
     })?;
     Ok(Recall {
+        charts: DailyCharts::from_entries(&entries, now_ms, to_local),
         groups: today_groups(entries, now_ms, to_local),
         vocabulary,
         ..Recall::default()
@@ -236,6 +239,9 @@ mod tests {
         let history = load_history(&path, 86_400_002, local).unwrap();
         assert_eq!(history.groups.len(), 1);
         assert_eq!(history.groups[0].text, "#today");
+        let tags = history.charts.rows(crate::metadata::Kind::Tag, 4);
+        assert_eq!(tags.len(), 1);
+        assert_eq!(tags[0].label, "#today");
         for (text, expected) in [("#o", "#old"), ("@", "@past"), ("??", "??calm")] {
             let token = crate::metadata::active_token(text, text.len()).unwrap();
             assert_eq!(

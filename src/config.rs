@@ -11,6 +11,45 @@ pub const DEFAULT_QUOTES: &str = include_str!("../data/quotes.txt");
 // Covers the worst-case UTF-8 size of 100 × 500-character valid quotes.
 pub const MAX_CONFIG_BYTES: u64 = 256 * 1024;
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChartStyle {
+    #[default]
+    Heatmap,
+    Treemap,
+}
+
+impl ChartStyle {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Heatmap => "heatmap",
+            Self::Treemap => "treemap",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ChartSettings {
+    pub style: ChartStyle,
+    pub projects: bool,
+    pub feelings: bool,
+    pub tags: bool,
+}
+
+impl ChartSettings {
+    pub fn kinds(&self) -> impl Iterator<Item = crate::metadata::Kind> + '_ {
+        use crate::metadata::Kind;
+        [
+            (self.projects, Kind::Project),
+            (self.feelings, Kind::Feeling),
+            (self.tags, Kind::Tag),
+        ]
+        .into_iter()
+        .filter_map(|(enabled, kind)| enabled.then_some(kind))
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Settings {
@@ -21,6 +60,7 @@ pub struct Settings {
     pub typing_limit_secs: u64,
     pub text_size: u32,
     pub idle_secs: u32,
+    pub charts: ChartSettings,
     pub quotes: Vec<String>,
 }
 
@@ -35,6 +75,7 @@ impl Default for Settings {
             typing_limit_secs: 120,
             text_size: 36,
             idle_secs: 120,
+            charts: ChartSettings::default(),
             quotes: parse_quotes(DEFAULT_QUOTES).expect("valid bundled quotes"),
         }
     }
@@ -337,6 +378,31 @@ mod tests {
         assert!(load(&path).is_err());
         assert_eq!(fs::read(&path).unwrap(), b"not json");
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn charts_default_off_and_round_trip_without_changing_existing_preferences() {
+        let mut json = serde_json::to_value(Settings::default()).unwrap();
+        json.as_object_mut().unwrap().remove("charts");
+        let mut settings: Settings = serde_json::from_value(json.clone()).unwrap();
+        assert_eq!(settings.charts.kinds().count(), 0);
+        assert_eq!(settings.charts.style, ChartStyle::Heatmap);
+        for style in [ChartStyle::Heatmap, ChartStyle::Treemap] {
+            settings.charts = ChartSettings {
+                style,
+                projects: true,
+                feelings: false,
+                tags: true,
+            };
+            let loaded: Settings =
+                serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
+            assert_eq!(loaded, settings);
+            assert_eq!(loaded.charts.kinds().count(), 2);
+        }
+        json["charts"] = serde_json::json!({"style": "pie"});
+        assert!(serde_json::from_value::<Settings>(json.clone()).is_err());
+        json["charts"] = serde_json::json!({"unknown": true});
+        assert!(serde_json::from_value::<Settings>(json).is_err());
     }
 
     #[test]
