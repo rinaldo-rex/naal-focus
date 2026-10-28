@@ -50,6 +50,50 @@ impl ChartSettings {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FocusStyle {
+    Totals,
+    Timeline,
+    #[default]
+    Both,
+}
+
+impl FocusStyle {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Totals => "totals",
+            Self::Timeline => "timeline",
+            Self::Both => "both",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FocusSide {
+    Left,
+    #[default]
+    Right,
+}
+
+impl FocusSide {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Left => "left",
+            Self::Right => "right",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct FocusSettings {
+    pub enabled: bool,
+    pub style: FocusStyle,
+    pub side: FocusSide,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Settings {
@@ -61,6 +105,7 @@ pub struct Settings {
     pub text_size: u32,
     pub idle_secs: u32,
     pub charts: ChartSettings,
+    pub focus: FocusSettings,
     pub quotes: Vec<String>,
 }
 
@@ -76,6 +121,7 @@ impl Default for Settings {
             text_size: 36,
             idle_secs: 120,
             charts: ChartSettings::default(),
+            focus: FocusSettings::default(),
             quotes: parse_quotes(DEFAULT_QUOTES).expect("valid bundled quotes"),
         }
     }
@@ -270,6 +316,32 @@ mod tests {
         assert_eq!(s.interval_secs, 300);
         assert_eq!(s.duration_secs, 5);
         s.validate().unwrap();
+    }
+
+    #[test]
+    fn focus_defaults_are_private_and_old_settings_remain_compatible() {
+        let mut old = serde_json::to_value(Settings::default()).unwrap();
+        old.as_object_mut().unwrap().remove("focus");
+        let loaded: Settings = serde_json::from_value(old).unwrap();
+        assert!(!loaded.focus.enabled);
+        assert_eq!(loaded.focus.style, FocusStyle::Both);
+        assert_eq!(loaded.focus.side, FocusSide::Right);
+        for style in [FocusStyle::Totals, FocusStyle::Timeline, FocusStyle::Both] {
+            for side in [FocusSide::Left, FocusSide::Right] {
+                let settings = Settings {
+                    focus: FocusSettings {
+                        enabled: true,
+                        style,
+                        side,
+                    },
+                    ..Settings::default()
+                };
+                let json = serde_json::to_vec(&settings).unwrap();
+                assert_eq!(serde_json::from_slice::<Settings>(&json).unwrap(), settings);
+            }
+        }
+        assert!(serde_json::from_str::<FocusSettings>(r#"{"style":"pie"}"#).is_err());
+        assert!(serde_json::from_str::<FocusSettings>(r#"{"side":"top"}"#).is_err());
     }
 
     #[test]
