@@ -48,6 +48,14 @@ cargo test --locked
 
 ## Latest recorded verification
 
+### 12/24-hour focus clocks (2026-10-28)
+
+- Focus-sidebar clocks now default to 12-hour AM/PM, including existing settings with no clock-format field. **Settings → Focus history → 24-hour time** selects 24-hour header, hourly ticks, and end time through the existing draft/save path. Durations and reflection-dashboard times are unchanged.
+- `RUST_TEST_THREADS=1 just check` passed formatting, warnings-denied Clippy, **134 applet-enabled unit tests**, and shell syntax. `RUST_TEST_THREADS=1 cargo test --locked` passed **122 core/helper tests**. `just check-native` passed shared settings/takeover with a nondefault 24-hour preference, without enabling tracking.
+- Tests cover legacy nested settings, both format round-trips and helper flags (including tracking disabled), dirty/post-save settings drafts, midnight/noon/evening labels, and measured label/bar separation at 1×/2×. Sidebar clipping/premultiplied-pixel tests exercise both formats, all three graphs, both sides, and compact, standard, portrait, ultrawide, and HiDPI desktop outputs. Fictional native full-timeline and compact-combined AM/PM frames spanning noon were visually inspected; these were not live overlays.
+
+- With explicit user approval, the release was installed under `~/.local` and COSMIC's panel reloaded. Both installed binaries matched the release build; all three applet processes ran the updated binary. The settings-file checksum and existing reminder/tracking/graph/side preferences were unchanged. Shared status confirmed the 12-hour upgrade default (`use_24_hour_time: false`) with no control/tracking errors. No test overlay or settings window was launched; live toggle clicks remain unverified.
+
 ### Today-only foreground-window history (2026-10-28)
 
 - User selected all three mockups as Settings options, both sidebar positions, **Timeline + totals / Right** defaults, application IDs plus window titles, today-only retention, and tracking independent of paused/snoozed reminders. Tracking remains off by default, including upgrades.
@@ -58,7 +66,7 @@ cargo test --locked
 - Native raster tests cover 1000×650, 1920×1080, ultrawide 2560×1080, portrait 1080×1920 (scale 1), and 3414×1920 physical / 1707×960 logical (scale 2), with all three graph styles and both sides. Additional tests preserve quote/sidebar pixels while mention heatmaps/treemaps and reflection editing repaint, and retain scaled field hit-testing/background-click behavior. Fictional native sample frames for the timeline, combined view, and compact left sidebar were visually inspected. These are raster frames, not live Wayland acceptance.
 - `just probe` reported ready safety guards and both required focus protocols, without requesting window metadata or creating surfaces. Outputs were DP-2 and DP-3 (1920×1080 logical, scale 1) and eDP-1 (1707×960 logical, scale 2).
 
-**Still unverified live:** enabled tracker activation/title events, installed graph/side controls, real private/incognito-title handling, elapsed-time accuracy during live switching, cross-output buffers, and actual idle/lock/suspend/midnight transitions. No installation, focus-capturing overlay, settings window, real tracking, or changes to real history/preferences were performed.
+**Still unverified live:** enabled tracker activation/title events, installed graph/side controls, real private/incognito-title handling, elapsed-time accuracy during live switching, cross-output buffers, and actual idle/lock/suspend/midnight transitions. At that initial feature-verification checkpoint, no installation, focus-capturing overlay, settings window, real tracking, or changes to real history/preferences were performed. Later installation/reload checks are recorded above.
 
 ### Overlay charts (issue #9)
 

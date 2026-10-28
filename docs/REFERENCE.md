@@ -46,6 +46,7 @@ Settings live at `$XDG_CONFIG_HOME/naal-focus/settings.json`, falling back to `~
 | Track window time | Off | Independent of reminders and snooze |
 | Focus graph | Timeline + totals | Time spent / Day timeline / Timeline + totals |
 | Focus sidebar | Right | Left / Right |
+| 24-hour time | Off (12-hour AM/PM) | Applies to focus-sidebar clock and timeline labels |
 | Quotes | Four reminders | 1–100; ≤500 characters each, including line breaks |
 
 - **Save settings** applies edited fields together, cancels pending/visible reminders, and restarts the interval. The settings window follows shared saved values without overwriting unsaved edits. A failed save retains its draft.
@@ -103,7 +104,7 @@ The optional version-1 settings field is `"charts": {"style": "heatmap", "projec
 
 ## Focus history
 
-**Settings… → Focus history → Track window time** opts in to collecting foreground application IDs and window titles through COSMIC's native window-info protocols. It is off for new and existing settings. **Graph** offers **Time spent**, **Day timeline**, and **Timeline + totals** (default); **Sidebar** offers **Left** and **Right** (default). These preferences use the same shared settings draft/save path as other fields.
+**Settings… → Focus history → Track window time** opts in to collecting foreground application IDs and window titles through COSMIC's native window-info protocols. It is off for new and existing settings. **Graph** offers **Time spent**, **Day timeline**, and **Timeline + totals** (default); **Sidebar** offers **Left** and **Right** (default). **24-hour time** switches the sidebar clock, hourly timeline labels, and end time between 12-hour AM/PM (default, including existing settings) and 24-hour time. Compact timeline ticks use labels such as `12 PM` or `12`; complete times use `12:05 PM` or `12:05`. Duration totals and the reflection dashboard are unchanged. These preferences use the same shared settings draft/save path as other fields. Standalone helpers default to 12-hour time; `--focus-24-hour` selects 24-hour labels without enabling tracking.
 
 - Tracking is independent of recurring reminders and snooze. Closing every applet/settings instance stops it; no separately installed service runs. Disabling tracking stops collection but keeps today's already collected records until normal day cleanup.
 - One shared supervisor records the active window once across all monitors. Foreground-window time is not proof of attention. Same application ID/title pairs are combined in totals; browser tabs are distinguishable only by the title exposed by the browser. Private/incognito windows are not automatically excluded, and titles may reveal documents or conversations. No screenshots, page content, URLs beyond what appears in a title, raw keys, or input events are recorded.

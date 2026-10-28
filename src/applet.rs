@@ -76,6 +76,7 @@ pub enum Message {
     FocusEnabled(bool),
     FocusStyle(usize),
     FocusSide(usize),
+    Focus24Hour(bool),
     Quotes(widget::text_editor::Action),
     Save,
     WindowFocus { id: Id, focused: bool },
@@ -220,6 +221,10 @@ impl App {
                     }),
                     Message::FocusSide,
                 ),
+            ))
+            .add(widget::settings::item(
+                "24-hour time",
+                widget::toggler(self.form.focus.use_24_hour_time).on_toggle(Message::Focus24Hour),
             ))
             .add(
                 widget::text("App names and window titles · Today only · Stored locally").size(12),
@@ -651,6 +656,10 @@ impl cosmic::Application for App {
                     self.form.focus.side = *side;
                     self.form.dirty = true;
                 }
+            }
+            Message::Focus24Hour(enabled) => {
+                self.form.focus.use_24_hour_time = enabled;
+                self.form.dirty = true;
             }
             Message::Quotes(action) => {
                 self.form.dirty |= action.is_edit();

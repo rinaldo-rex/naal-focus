@@ -92,6 +92,7 @@ pub struct FocusSettings {
     pub enabled: bool,
     pub style: FocusStyle,
     pub side: FocusSide,
+    pub use_24_hour_time: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -326,22 +327,38 @@ mod tests {
         assert!(!loaded.focus.enabled);
         assert_eq!(loaded.focus.style, FocusStyle::Both);
         assert_eq!(loaded.focus.side, FocusSide::Right);
+        assert!(!loaded.focus.use_24_hour_time);
+        let legacy: FocusSettings =
+            serde_json::from_str(r#"{"enabled":true,"style":"timeline","side":"left"}"#).unwrap();
+        assert_eq!(
+            legacy,
+            FocusSettings {
+                enabled: true,
+                style: FocusStyle::Timeline,
+                side: FocusSide::Left,
+                use_24_hour_time: false,
+            }
+        );
         for style in [FocusStyle::Totals, FocusStyle::Timeline, FocusStyle::Both] {
             for side in [FocusSide::Left, FocusSide::Right] {
-                let settings = Settings {
-                    focus: FocusSettings {
-                        enabled: true,
-                        style,
-                        side,
-                    },
-                    ..Settings::default()
-                };
-                let json = serde_json::to_vec(&settings).unwrap();
-                assert_eq!(serde_json::from_slice::<Settings>(&json).unwrap(), settings);
+                for use_24_hour_time in [false, true] {
+                    let settings = Settings {
+                        focus: FocusSettings {
+                            enabled: true,
+                            style,
+                            side,
+                            use_24_hour_time,
+                        },
+                        ..Settings::default()
+                    };
+                    let json = serde_json::to_vec(&settings).unwrap();
+                    assert_eq!(serde_json::from_slice::<Settings>(&json).unwrap(), settings);
+                }
             }
         }
         assert!(serde_json::from_str::<FocusSettings>(r#"{"style":"pie"}"#).is_err());
         assert!(serde_json::from_str::<FocusSettings>(r#"{"side":"top"}"#).is_err());
+        assert!(serde_json::from_str::<FocusSettings>(r#"{"use_24_hour_time":"yes"}"#).is_err());
     }
 
     #[test]

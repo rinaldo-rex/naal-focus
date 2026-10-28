@@ -138,7 +138,7 @@ pub fn render_focus(
     image.text_at(font, "Today", 14.0 * scale, area.x, area.y, [210, 224, 215]);
     if let Some(snapshot) = snapshot {
         let local = to_local(snapshot.day.observed_ms);
-        let time = format!("{:02}:{:02}", local.hour, local.minute);
+        let time = clock_label(local.hour, Some(local.minute), settings.use_24_hour_time);
         image.text_at(
             font,
             &time,
@@ -195,7 +195,7 @@ pub fn render_focus(
     }
     match settings.style {
         FocusStyle::Totals => ranking(&mut image, font, body, &day.totals(6), scale, &palette),
-        FocusStyle::Timeline => timeline(&mut image, font, body, day, scale, false, &palette),
+        FocusStyle::Timeline => timeline(&mut image, font, body, day, scale, settings, &palette),
         FocusStyle::Both => {
             timeline(
                 &mut image,
@@ -206,7 +206,7 @@ pub fn render_focus(
                 },
                 day,
                 scale,
-                true,
+                settings,
                 &palette,
             );
             let list = Rect {
@@ -301,15 +301,46 @@ fn ranking(
     }
 }
 
+fn clock_label(hour: u32, minute: Option<u32>, use_24_hour_time: bool) -> String {
+    let display_hour = if use_24_hour_time {
+        hour
+    } else {
+        (hour + 11) % 12 + 1
+    };
+    let mut label = if use_24_hour_time {
+        format!("{display_hour:02}")
+    } else {
+        display_hour.to_string()
+    };
+    if let Some(minute) = minute {
+        label.push_str(&format!(":{minute:02}"));
+    }
+    if !use_24_hour_time {
+        label.push_str(if hour < 12 { " AM" } else { " PM" });
+    }
+    label
+}
+
+fn timeline_gutter(font: &Font, scale: f32, mini: bool, use_24_hour_time: bool) -> f32 {
+    (0..24).fold(
+        if mini { 28.0 * scale } else { 45.0 * scale },
+        |width, hour| {
+            let label = clock_label(hour, (!mini).then_some(0), use_24_hour_time);
+            width.max(text_width(font, &label, 9.0 * scale) + 6.0 * scale)
+        },
+    )
+}
+
 fn timeline(
     image: &mut Image<'_>,
     font: &Font,
     area: Rect,
     day: &Day,
     scale: f32,
-    mini: bool,
+    settings: &FocusSettings,
     palette: &Palette,
 ) {
+    let mini = settings.style == FocusStyle::Both;
     let Some(first) = day.sessions.first() else {
         return;
     };
@@ -323,7 +354,7 @@ fn timeline(
     let at = |timestamp: u64| {
         area.y + (timestamp.saturating_sub(start) as f64 / span).clamp(0.0, 1.0) as f32 * height
     };
-    let bar_x = area.x + if mini { 28.0 * scale } else { 45.0 * scale };
+    let bar_x = area.x + timeline_gutter(font, scale, mini, settings.use_24_hour_time);
     let bar_width = if mini { 12.0 * scale } else { 9.0 * scale };
     let mut tick = start;
     for _ in 0..26 {
@@ -331,11 +362,7 @@ fn timeline(
             break;
         }
         let local = to_local(tick);
-        let label = if mini {
-            format!("{:02}", local.hour)
-        } else {
-            format!("{:02}:00", local.hour)
-        };
+        let label = clock_label(local.hour, (!mini).then_some(0), settings.use_24_hour_time);
         image.text_at(font, &label, 9.0 * scale, area.x, at(tick), [122, 143, 130]);
         tick = tick.saturating_add(3_600_000);
     }
@@ -387,7 +414,7 @@ fn timeline(
         }
     }
     let local = to_local(end);
-    let label = format!("{:02}:{:02}", local.hour, local.minute);
+    let label = clock_label(local.hour, Some(local.minute), settings.use_24_hour_time);
     image.text_at(
         font,
         &label,
@@ -433,6 +460,45 @@ mod tests {
         }
     }
     #[test]
+    fn clock_labels_cover_midnight_noon_and_evening() {
+        for (hour, minute, full, compact, military) in [
+            (0, 0, "12:00 AM", "12 AM", "00:00"),
+            (0, 5, "12:05 AM", "12 AM", "00:05"),
+            (11, 59, "11:59 AM", "11 AM", "11:59"),
+            (12, 0, "12:00 PM", "12 PM", "12:00"),
+            (12, 7, "12:07 PM", "12 PM", "12:07"),
+            (13, 5, "1:05 PM", "1 PM", "13:05"),
+            (23, 59, "11:59 PM", "11 PM", "23:59"),
+        ] {
+            assert_eq!(clock_label(hour, Some(minute), false), full);
+            assert_eq!(clock_label(hour, None, false), compact);
+            assert_eq!(clock_label(hour, Some(minute), true), military);
+            assert_eq!(clock_label(hour, None, true), format!("{hour:02}"));
+        }
+    }
+
+    #[test]
+    fn timeline_clock_labels_fit_beside_bars_in_both_formats() {
+        let font = font();
+        for scale in [1.0, 2.0] {
+            for mini in [false, true] {
+                for use_24_hour_time in [false, true] {
+                    let gutter = timeline_gutter(&font, scale, mini, use_24_hour_time);
+                    for hour in 0..24 {
+                        let label = clock_label(hour, (!mini).then_some(0), use_24_hour_time);
+                        assert!(text_width(&font, &label, 9.0 * scale) + 4.0 * scale <= gutter);
+                        if mini {
+                            let end = clock_label(hour, Some(59), use_24_hour_time);
+                            assert!(text_width(&font, &end, 9.0 * scale) <= 53.0 * scale);
+                            assert!(gutter + 12.0 * scale <= 53.0 * scale);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn disabled_and_small_desktop_outputs_reserve_no_space() {
         let snapshot = snapshot();
         let palette = Palette::new(&snapshot.day);
@@ -469,54 +535,57 @@ mod tests {
         ] {
             for side in [FocusSide::Left, FocusSide::Right] {
                 for style in [FocusStyle::Totals, FocusStyle::Timeline, FocusStyle::Both] {
-                    let settings = FocusSettings {
-                        enabled: true,
-                        style,
-                        side,
-                    };
-                    let mut canvas = vec![0; width * height * 4];
-                    render::render_overlay(
-                        &mut canvas,
-                        (width, height),
-                        &font,
-                        scale,
-                        OverlayView {
-                            quote: "Take one breath.",
-                            text_size: 36.0 * scale,
-                            charts: &ChartSettings::default(),
-                            focus: &settings,
-                        },
-                    );
-                    let before = canvas.clone();
-                    render_focus(
-                        &mut canvas,
-                        (width, height),
-                        &font,
-                        scale,
-                        &settings,
-                        Some(&snapshot),
-                    );
-                    let area =
-                        focus_sidebar(width as f32, height as f32, scale, &settings).unwrap();
-                    let mut changed = 0;
-                    for (i, (a, b)) in before
-                        .chunks_exact(4)
-                        .zip(canvas.chunks_exact(4))
-                        .enumerate()
-                    {
-                        if a != b {
-                            changed += 1;
-                            assert!(area.contains((i % width) as f32, (i / width) as f32));
-                        }
-                        let pixel = u32::from_ne_bytes(b.try_into().unwrap());
-                        let alpha = pixel >> 24;
-                        assert!(
-                            [16, 8, 0]
-                                .into_iter()
-                                .all(|shift| (pixel >> shift) & 255 <= alpha)
+                    for use_24_hour_time in [false, true] {
+                        let settings = FocusSettings {
+                            enabled: true,
+                            style,
+                            side,
+                            use_24_hour_time,
+                        };
+                        let mut canvas = vec![0; width * height * 4];
+                        render::render_overlay(
+                            &mut canvas,
+                            (width, height),
+                            &font,
+                            scale,
+                            OverlayView {
+                                quote: "Take one breath.",
+                                text_size: 36.0 * scale,
+                                charts: &ChartSettings::default(),
+                                focus: &settings,
+                            },
                         );
+                        let before = canvas.clone();
+                        render_focus(
+                            &mut canvas,
+                            (width, height),
+                            &font,
+                            scale,
+                            &settings,
+                            Some(&snapshot),
+                        );
+                        let area =
+                            focus_sidebar(width as f32, height as f32, scale, &settings).unwrap();
+                        let mut changed = 0;
+                        for (i, (a, b)) in before
+                            .chunks_exact(4)
+                            .zip(canvas.chunks_exact(4))
+                            .enumerate()
+                        {
+                            if a != b {
+                                changed += 1;
+                                assert!(area.contains((i % width) as f32, (i / width) as f32));
+                            }
+                            let pixel = u32::from_ne_bytes(b.try_into().unwrap());
+                            let alpha = pixel >> 24;
+                            assert!(
+                                [16, 8, 0]
+                                    .into_iter()
+                                    .all(|shift| (pixel >> shift) & 255 <= alpha)
+                            );
+                        }
+                        assert!(changed > 100);
                     }
-                    assert!(changed > 100);
                 }
             }
         }

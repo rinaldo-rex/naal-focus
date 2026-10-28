@@ -71,6 +71,7 @@ fn monitor_clients_share_controls_and_take_over_without_duplicate_timers() {
             enabled: false,
             style: config::FocusStyle::Timeline,
             side: config::FocusSide::Left,
+            use_24_hour_time: true,
         },
         charts: config::ChartSettings {
             style: config::ChartStyle::Treemap,

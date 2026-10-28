@@ -231,14 +231,18 @@ mod tests {
         form.focus.enabled = true;
         form.focus.style = config::FocusStyle::Timeline;
         form.focus.side = config::FocusSide::Left;
+        form.focus.use_24_hour_time = true;
         form.dirty = true;
         form.sync(&original, None);
         let saved = form.save(&original).unwrap();
         assert_eq!(saved.focus, form.focus);
+        assert!(saved.focus.use_24_hour_time);
         form.focus.style = config::FocusStyle::Totals;
+        form.focus.use_24_hour_time = false;
         assert!(form.sync(&saved, None));
         assert!(form.dirty);
         assert_eq!(form.focus.style, config::FocusStyle::Totals);
+        assert!(!form.focus.use_24_hour_time);
         let mut clean = SettingsForm::new(&original);
         clean.sync(&saved, None);
         assert_eq!(clean.focus, saved.focus);

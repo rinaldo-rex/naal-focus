@@ -45,7 +45,7 @@ Charts show today's saved mentions, not time spent. Successful saves and correct
 
 ## Focus history
 
-Under **Settings… → Focus history**, enable **Track window time**. Tracking starts **off**, including on upgrades. Choose **Time spent**, **Day timeline**, or **Timeline + totals** (default), and a **Left** or **Right** sidebar (default Right).
+Under **Settings… → Focus history**, enable **Track window time**. Tracking starts **off**, including on upgrades. Choose **Time spent**, **Day timeline**, or **Timeline + totals** (default), and a **Left** or **Right** sidebar (default Right). Times use a 12-hour clock with AM/PM by default; enable **24-hour time** to switch the sidebar clock and timeline labels.
 
 This records foreground applications and window titles while the applet runs—not screenshots, keystrokes, or proof of attention. Tracking keeps running when reminders are paused or snoozed; its own switch stops collection. Idle, lock, sleep, missing observations, Naal Focus windows, and supervised reminder time are excluded.
 

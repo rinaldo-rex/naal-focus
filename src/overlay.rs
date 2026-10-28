@@ -61,6 +61,7 @@ Usage: naal-focus-overlay [OPTIONS]
   --focus-history      Show collected focus history; does not start tracking
   --focus-style STYLE  totals, timeline, or both (default)
   --focus-side SIDE    left or right (default)
+  --focus-24-hour      Use 24-hour sidebar times (default: 12-hour AM/PM)
   --payload            Read the supervisor's bounded JSON quote/history payload
   --stdin              Read one raw UTF-8 quote (including line breaks) from stdin
   -h, --help           Print help
@@ -107,6 +108,7 @@ impl Options {
                 "--stdin" => options.stdin = true,
                 "--payload" => options.payload = true,
                 "--focus-history" => options.settings.focus.enabled = true,
+                "--focus-24-hour" => options.settings.focus.use_24_hour_time = true,
                 "--focus-style" => {
                     options.settings.focus.style = match args.next().as_deref() {
                         Some("totals") => FocusStyle::Totals,
@@ -1471,12 +1473,18 @@ mod tests {
             "timeline",
             "--focus-side",
             "left",
+            "--focus-24-hour",
         ])
         .unwrap()
         .unwrap();
         assert!(selected.settings.focus.enabled);
         assert_eq!(selected.settings.focus.style, FocusStyle::Timeline);
         assert_eq!(selected.settings.focus.side, FocusSide::Left);
+        assert!(selected.settings.focus.use_24_hour_time);
+        let clock_only = parse(&["--focus-24-hour"]).unwrap().unwrap();
+        assert!(clock_only.settings.focus.use_24_hour_time);
+        assert!(!clock_only.settings.focus.enabled);
+        assert!(!parse(&[]).unwrap().unwrap().settings.focus.use_24_hour_time);
         let payload = Payload {
             quote: "Take a breath.\nReturn.".into(),
             focus: Some(focus::Snapshot {

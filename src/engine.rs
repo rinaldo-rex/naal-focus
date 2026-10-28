@@ -493,6 +493,9 @@ fn helper_arguments(settings: &Settings) -> Vec<String> {
     if settings.focus.enabled {
         arguments.push("--focus-history".into());
     }
+    if settings.focus.use_24_hour_time {
+        arguments.push("--focus-24-hour".into());
+    }
     arguments
 }
 
@@ -572,18 +575,21 @@ mod tests {
                 crate::config::FocusSide::Right,
             ] {
                 for enabled in [false, true] {
-                    let settings = Settings {
-                        focus: crate::config::FocusSettings {
-                            enabled,
-                            style,
-                            side,
-                        },
-                        ..Settings::default()
-                    };
-                    let arguments = helper_arguments(&settings);
-                    assert_eq!(arguments[0], "--payload");
-                    let helper = crate::overlay::Options::parse(arguments).unwrap().unwrap();
-                    assert_eq!(helper.settings.focus, settings.focus);
+                    for use_24_hour_time in [false, true] {
+                        let settings = Settings {
+                            focus: crate::config::FocusSettings {
+                                enabled,
+                                style,
+                                side,
+                                use_24_hour_time,
+                            },
+                            ..Settings::default()
+                        };
+                        let arguments = helper_arguments(&settings);
+                        assert_eq!(arguments[0], "--payload");
+                        let helper = crate::overlay::Options::parse(arguments).unwrap().unwrap();
+                        assert_eq!(helper.settings.focus, settings.focus);
+                    }
                 }
             }
         }
