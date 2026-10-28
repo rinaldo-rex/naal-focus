@@ -21,6 +21,10 @@ check-native:
 check-settings:
     ./scripts/test-settings.sh
 
+# Offscreen PPM snapshots/timings; no Wayland connection or keyboard focus.
+preview-breathing output="/tmp/naal-breathing-native":
+    cargo run --locked --release --example breathing-preview -- "{{output}}"
+
 # Read-only: creates no overlay and captures no focus.
 probe:
     cargo run --locked --bin naal-focus-overlay -- --check

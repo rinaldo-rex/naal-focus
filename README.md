@@ -23,9 +23,15 @@ Add **Naal Focus** through **COSMIC Settings → Desktop → Dock/Panel → Appl
 
 All monitor popups share the same settings and timer. Updates preserve existing preferences.
 
+## Breathing entrance
+
+Each reminder gently fades in with a fresh seeded geometric pattern: **Radial lattice**, **Nested polygons**, **Constellation**, or **Woven field**. All monitors share the same pattern and breath. By default, one breath (4 seconds in, 6 out) comes before the quote, history, charts, and textbox appear. The full entrance takes 14 seconds; your reflection countdown starts afterward.
+
+Under **Settings… → Breathing entrance**, switch breathing on/off, choose a pace and one or two breaths, and select the allowed pattern families. Keep at least one selected. **Reduced motion** holds the geometry still with timed breath cues and gentle fades. Typing during the entrance is ignored; **Esc** immediately dismisses all monitors. Existing preferences gain the enabled entrance by default without enabling recurring reminders.
+
 ## Activity reflections
 
-The quiet textbox is ready for typing without a click. Typing holds the normal countdown; **Enter** saves locally and resumes the remaining time. Saved text replaces the textbox—press **Enter again** or click it to correct the same entry. Enter reopens with the cursor at the end. Reopening alone does not pause the countdown; changing text does.
+After the entrance, the quiet textbox is ready for typing without a click. Typing holds the normal countdown; **Enter** saves locally and resumes the remaining time. Saved text replaces the textbox—press **Enter again** or click it to correct the same entry. Enter reopens with the cursor at the end. Reopening alone does not pause the countdown; changing text does.
 
 Add `#tags`, `@projects`, and `??feelings` inline (for example, `Reviewing @naal #rust ??focused`). Pills appear above the textbox as you type. Existing values autocomplete from your saved history: **↑ / ↓** select, **Tab** inserts, and **Enter** saves the text as written. **Esc** closes suggestions first; history browsing returns when suggestions are closed. Values are case-insensitive and may use letters, numbers, `_`, and `-`.
 

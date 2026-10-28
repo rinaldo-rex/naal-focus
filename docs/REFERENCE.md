@@ -29,7 +29,7 @@ Uninstalling also leaves `~/.naal-focus/` activity history untouched. Both scrip
 
 ## Settings and controls
 
-Click the panel/dock icon for a compact popup with status, the recurring-reminders toggle, **Show now**, **Snooze 15 min** (or **Resume** while snoozed), **Dashboard…**, and **Settings…**. Detailed preferences and quote editing live only in the dedicated settings window, grouped into **Timing**, **Appearance**, **Overlay charts**, **Focus history**, and **Reflection**. The window stays open when clicking elsewhere. Reopening settings activates the existing window rather than creating another; `naal-focus --settings` uses the same entry point.
+Click the panel/dock icon for a compact popup with status, the recurring-reminders toggle, **Show now**, **Snooze 15 min** (or **Resume** while snoozed), **Dashboard…**, and **Settings…**. Detailed preferences and quote editing live only in the dedicated settings window, grouped into **Timing**, **Appearance**, **Breathing entrance**, **Overlay charts**, **Focus history**, and **Reflection**. The window stays open when clicking elsewhere. Reopening settings activates the existing window rather than creating another; `naal-focus --settings` uses the same entry point.
 
 Settings live at `$XDG_CONFIG_HOME/naal-focus/settings.json`, falling back to `~/.config/naal-focus/settings.json`. Saves are atomic. Invalid, oversized, or unsupported-version files remain untouched until explicit **Save settings** replaces them.
 
@@ -37,7 +37,12 @@ Settings live at `$XDG_CONFIG_HOME/naal-focus/settings.json`, falling back to `~
 |---|---:|---|
 | Recurring reminders | Paused | Enabled/paused |
 | Interval | 300 seconds | 15–86400; greater than duration |
-| Duration | 5 seconds | 1–30 seconds |
+| Reflection duration | 5 seconds | 1–30 seconds, after the entrance |
+| Breathing entrance | On | On/off; separate from recurring reminders |
+| Breath pace | 4s in / 6s out | 3s/4s, 4s/6s, or 5s/5s |
+| Breaths | One | One or two |
+| Breathing patterns | All four | Any nonempty subset of lattice, polygons, constellation, weave |
+| Reduced motion | Off | Static geometry with timed breath cues and fades |
 | Typing time limit | 120 seconds | 30–600 seconds; separate from duration |
 | Text size | 36 logical pixels | 22–72 |
 | Idle threshold | 120 seconds | 30–3600 |
@@ -57,9 +62,31 @@ Settings live at `$XDG_CONFIG_HOME/naal-focus/settings.json`, falling back to `~
 
 Every monitor popup and `naal-focus --settings` shares one timer through session D-Bus. Closing a secondary instance leaves reminders running. If the owner closes, another instance takes over with the remaining snooze and a fresh interval. Closing all instances stops reminders and the helper.
 
+## Breathing entrance
+
+The native overlay chooses one allowed family and a fresh random seed for each reminder. Geometry is generated once; only its breath amplitude changes afterward. Connections never pop in/out and exhaling retraces inhaling. Shape, color, and monotonic timeline are shared across outputs, with layout adapted to each desktop size/scale. Consecutive reminders may choose the same family with different geometry.
+
+The entrance fades in for two seconds, guides one or two complete breaths, then fades out the geometry and reveals the normal overlay over two seconds. Default timing is **14 seconds**, or **24 seconds** with two 4s/6s breaths; the shorter pace takes **11 or 18 seconds**. Quote, reflection/history, charts, and focus sidebar stay hidden during breathing. The full normal reflection duration and fixed typing allowance are preserved. All typing, Enter, and field clicks are ignored until the reveal finishes; **Escape dismisses every output immediately**. Safety cancellation and both watchdogs remain active throughout.
+
+**Settings… → Breathing entrance** offers on/off, reduced motion, pace, breath count, and four family switches. Selecting no families is a validation error, not a silent fallback. Reduced motion freezes the shape but retains the chosen timing, breath cues, and gentle fades. Switching the entrance off restores immediate reflection and the old lifetime budget. Existing version-1 settings default to breathing on, all four families, one balanced breath, and reduced motion off; recurrence remains unchanged.
+
+The optional settings object is:
+
+```json
+"breathing": {
+  "enabled": true,
+  "reduced_motion": false,
+  "pace": "balanced",
+  "cycles": 1,
+  "families": ["lattice", "polygons", "constellation", "weave"]
+}
+```
+
+Other pace values are `short` (3s/4s) and `even` (5s/5s). The helper accepts `--breathing on|off`, `--breath-pace short|balanced|even`, `--breath-cycles 1|2`, `--breath-patterns lattice,polygons,constellation,weave`, and `--reduced-motion`. These are validated before creating surfaces. Manual helper runs still **capture keyboard focus** and require the consented testing procedure.
+
 ## Activity reflections and history
 
-The overlay has one shared reflection across all covered monitors. Its single-line textbox is ready for input without clicking; the quote remains prominent. No typing means no logging and no change to the normal dismissal countdown.
+After the breathing entrance, the overlay has one shared reflection across all covered monitors. Its single-line textbox is ready for input without clicking; the quote remains prominent. No typing means no logging and no change to the normal dismissal countdown.
 
 - Three rows above the textbox form a rolling dial of previous reflections from the current local day, loaded fresh for each reminder. Consecutive identical texts are grouped; separate runs of the same task remain separate. Newest is nearest the input, with bottom/middle/top text opacity **70% / 40% / 20%**. Only the highlighted row shows the latest occurrence's relative age and repeat count (for example, `5 min ago · ×3`). Long rows are visually shortened, never truncated in storage or recall.
 - **↑** selects the newest group, then rolls older groups down into the highlighted bottom position; newer groups roll below it and disappear. **↓** reverses the dial. It stops at the first reflection of the local day, never wraps, and shows fewer than three rows at that boundary. History rows are keyboard-only; clicks do not recall them.
