@@ -2,6 +2,7 @@
 use crate::{
     activity::{Activity, Expiry},
     activity_log::{Entry, PendingSave},
+    breathing::Entrance,
     config::{ChartSettings, ChartStyle, FocusSide, FocusStyle, Settings, validate_quotes},
     dashboard, focus,
     guard::Guard,
@@ -310,6 +311,7 @@ pub fn run(mut options: Options) -> Result<(), Box<dyn Error>> {
         chart_revision: 1,
         focus_settings: options.settings.focus.clone(),
         focus_snapshot,
+        entrance: Entrance::new(options.settings.breathing.clone(), random_seed()?),
         requested_at: None,
         mapped_at: None,
         activity: Activity::new(
@@ -406,7 +408,12 @@ pub fn run(mut options: Options) -> Result<(), Box<dyn Error>> {
             app.show(&qh, &selected);
             arm_watchdog(options.settings.helper_lifetime_secs());
         }
-        event_loop.dispatch(Duration::from_millis(50), &mut app)?;
+        let interval = if app.entrance_frame(now).active {
+            16
+        } else {
+            50
+        };
+        event_loop.dispatch(Duration::from_millis(interval), &mut app)?;
         let now = boot_time();
         app.poll_save(now);
         app.poll_history();
@@ -444,6 +451,12 @@ pub fn run(mut options: Options) -> Result<(), Box<dyn Error>> {
     }
 }
 
+fn random_seed() -> Result<u64, std::io::Error> {
+    let mut bytes = [0; 8];
+    std::fs::File::open("/dev/urandom")?.read_exact(&mut bytes)?;
+    Ok(u64::from_ne_bytes(bytes))
+}
+
 fn arm_watchdog(seconds: u64) {
     let deadline = boot_time() + Duration::from_secs(seconds);
     std::thread::spawn(move || {
@@ -466,6 +479,9 @@ struct Active {
     keyboard_focus_observed: bool,
     buffers: Vec<Buffer>,
     chart_versions: Vec<u64>,
+    entrance_dirty: Vec<bool>,
+    entrance_backdrops: Vec<[u8; 4]>,
+    reveal_cache: Option<Vec<u8>>,
     buffer_size: (u32, u32, u32),
 }
 struct SaveJob {
@@ -493,6 +509,7 @@ struct App {
     chart_revision: u64,
     focus_settings: crate::config::FocusSettings,
     focus_snapshot: Option<focus::Snapshot>,
+    entrance: Entrance,
     requested_at: Option<Duration>,
     mapped_at: Option<Duration>,
     activity: Activity,
@@ -507,9 +524,18 @@ struct App {
     last_paint: Duration,
 }
 impl App {
+    fn entrance_frame(&self, now: Duration) -> crate::breathing::Frame {
+        self.entrance.frame(
+            self.mapped_at
+                .map_or(Duration::ZERO, |at| now.saturating_sub(at)),
+        )
+    }
+    fn reflection_ready(&self, now: Duration) -> bool {
+        self.entrance.ready(self.mapped_at, now)
+    }
     fn submit(&mut self, now: Duration) {
         // One in-flight submission: repeated Enter/monitor events cannot duplicate it.
-        if self.save.is_some() {
+        if self.save.is_some() || !self.reflection_ready(now) {
             return;
         }
         let Some((generation, text)) = self.activity.enter(now) else {
@@ -606,6 +632,12 @@ impl App {
         {
             return;
         }
+        if !self.reflection_ready(now) {
+            if event.keysym == Keysym::Escape && !repeated {
+                self.reason = Some("escape");
+            }
+            return;
+        }
         if event.keysym == Keysym::Escape {
             if !repeated && !self.activity.dismiss_suggestions() && self.activity.cancel(now) {
                 self.reason = Some("escape");
@@ -698,7 +730,13 @@ impl App {
             self.chart_revision += 1;
             self.dirty = true;
         }
-        let interval = if self.activity.recall.animating(now)
+        let entrance = self.entrance_frame(now);
+        if !entrance.active && self.entrance_frame(self.last_paint).active {
+            self.dirty = true;
+        }
+        let interval = if entrance.active {
+            Duration::from_millis(33)
+        } else if self.activity.recall.animating(now)
             || self.activity.recall.animating(self.last_paint)
         {
             Duration::from_millis(16)
@@ -716,7 +754,8 @@ impl App {
             }
         }
         self.last_paint = now;
-        self.dirty = false;
+        self.dirty =
+            !entrance.active && self.active.iter().any(|a| a.entrance_dirty.contains(&true));
         Ok(())
     }
     fn show(&mut self, qh: &QueueHandle<Self>, outputs: &[wl_output::WlOutput]) {
@@ -754,6 +793,9 @@ impl App {
                 keyboard_focus_observed: false,
                 buffers: Vec::new(),
                 chart_versions: Vec::new(),
+                entrance_dirty: Vec::new(),
+                entrance_backdrops: Vec::new(),
+                reveal_cache: None,
                 buffer_size: (0, 0, 0),
             });
         }
@@ -777,18 +819,30 @@ impl App {
                 u64::from(a.size.0) * u64::from(a.size.1) * (a.scale.clamp(1, 4) as u64).pow(2)
             })
             .sum();
-        if total > 64_000_000 {
+        // Two reusable buffers plus a temporary reveal cache per output. Keep
+        // the same 512 MB aggregate pixel-storage ceiling as the old two-buffer path.
+        let copies = if self.entrance.settings.enabled { 3 } else { 2 };
+        if total.saturating_mul(copies) > 128_000_000 {
             return Err("Combined monitor buffers exceed the safety budget.".into());
         }
         if self.active[index].buffer_size != (width, height, scale) {
             self.active[index].buffers.clear();
             self.active[index].chart_versions.clear();
+            self.active[index].entrance_dirty.clear();
+            self.active[index].entrance_backdrops.clear();
+            self.active[index].reveal_cache = None;
             self.active[index].buffer_size = (width, height, scale);
         }
-        let available = self.active[index]
+        let entrance = self.entrance_frame(now);
+        let active = &self.active[index];
+        let available = active
             .buffers
             .iter()
-            .position(|buffer| self.pool.canvas(buffer).is_some());
+            .enumerate()
+            .filter(|(_, buffer)| self.pool.canvas(*buffer).is_some())
+            // Restore both caches before returning to ordinary input updates.
+            .min_by_key(|(i, _)| entrance.active || !active.entrance_dirty[*i])
+            .map(|(i, _)| i);
         let (buffer_index, fresh) = if let Some(index) = available {
             (index, false)
         } else if self.active[index].buffers.len() < 2 {
@@ -800,98 +854,135 @@ impl App {
             )?;
             self.active[index].buffers.push(buffer);
             self.active[index].chart_versions.push(0);
+            self.active[index].entrance_dirty.push(false);
+            self.active[index].entrance_backdrops.push([0; 4]);
             (self.active[index].buffers.len() - 1, true)
         } else {
             // Never allocate an unbounded queue of frames if the compositor is
             // slow or stops releasing buffers during a long writing session.
             return Ok(());
         };
-        let charts_changed = self.active[index].chart_versions[buffer_index] != self.chart_revision;
+        let restore = self.active[index].entrance_dirty[buffer_index];
+        let full = fresh || restore;
+        let charts_changed =
+            full || self.active[index].chart_versions[buffer_index] != self.chart_revision;
+        let background = render::breathing_background(entrance);
+        let full_entrance =
+            fresh || self.active[index].entrance_backdrops[buffer_index] != background;
+        if !entrance.active {
+            self.active[index].reveal_cache = None;
+        }
         let content = render::focus_content(
             width as f32,
             height as f32,
             scale as f32,
             &self.focus_settings,
         );
+        let mut reveal_cache = None;
         let buffer = &self.active[index].buffers[buffer_index];
         let canvas = self.pool.canvas(buffer).ok_or("Buffer is still in use")?;
-        if fresh {
-            render::render_overlay(
+        if entrance.active && entrance.reflection == 0.0 {
+            render::render_breathing(
                 canvas,
                 (width as usize, height as usize),
                 self.font.as_ref().ok_or("Font not loaded")?,
                 scale as f32,
-                render::OverlayView {
-                    quote: &self.quote,
-                    text_size: self.text_size as f32 * scale as f32,
-                    charts: &self.charts,
-                    focus: &self.focus_settings,
+                render::BreathingView {
+                    pattern: &self.entrance.pattern,
+                    frame: entrance,
+                    full: full_entrance,
                 },
             );
-        }
-        if charts_changed {
-            render::render_charts_in(
+        } else if entrance.active && self.active[index].reveal_cache.is_some() {
+            render::render_reveal(
+                canvas,
+                self.active[index].reveal_cache.as_ref().unwrap(),
+                entrance.reflection,
+            );
+        } else {
+            if full {
+                render::render_overlay(
+                    canvas,
+                    (width as usize, height as usize),
+                    self.font.as_ref().ok_or("Font not loaded")?,
+                    scale as f32,
+                    render::OverlayView {
+                        quote: &self.quote,
+                        text_size: self.text_size as f32 * scale as f32,
+                        charts: &self.charts,
+                        focus: &self.focus_settings,
+                    },
+                );
+            }
+            if charts_changed {
+                render::render_charts_in(
+                    canvas,
+                    (width as usize, height as usize),
+                    self.font.as_ref().ok_or("Font not loaded")?,
+                    scale as f32,
+                    content,
+                    render::ChartView {
+                        settings: &self.charts,
+                        data: self
+                            .pending_history
+                            .is_none()
+                            .then_some(&self.activity.recall.charts),
+                        unavailable: self.history_unavailable,
+                    },
+                );
+                render::render_focus(
+                    canvas,
+                    (width as usize, height as usize),
+                    self.font.as_ref().ok_or("Font not loaded")?,
+                    scale as f32,
+                    &self.focus_settings,
+                    self.focus_snapshot.as_ref(),
+                );
+            }
+            let saving = self
+                .save
+                .as_ref()
+                .is_some_and(|job| job.generation == self.activity.generation());
+            render::render_input_in(
                 canvas,
                 (width as usize, height as usize),
                 self.font.as_ref().ok_or("Font not loaded")?,
                 scale as f32,
                 content,
-                render::ChartView {
-                    settings: &self.charts,
-                    data: self
-                        .pending_history
-                        .is_none()
-                        .then_some(&self.activity.recall.charts),
-                    unavailable: self.history_unavailable,
+                render::InputView {
+                    editor: &self.activity.editor,
+                    suggestions: &self.activity.suggestions(),
+                    suggestion_index: self.activity.suggestion_index(),
+                    saved_text: self.activity.displayed_text(),
+                    progress: self.activity.typing_fraction(now),
+                    message: if saving {
+                        Some("Saving…")
+                    } else if let Some(error) = self.activity.error.as_deref() {
+                        Some(error)
+                    } else if self.history_unavailable && !self.activity.editing() {
+                        Some("Previous reflections unavailable · type to reflect")
+                    } else {
+                        None
+                    },
+                    editing: self.activity.editing(),
+                    caret_visible: self.activity.recall.selected().is_none()
+                        && (now.as_millis() / 500).is_multiple_of(2),
+                    history: Some(render::HistoryView {
+                        recall: &self.activity.recall,
+                        now,
+                        now_ms: recall::system_ms(),
+                    }),
                 },
             );
-            render::render_focus(
-                canvas,
-                (width as usize, height as usize),
-                self.font.as_ref().ok_or("Font not loaded")?,
-                scale as f32,
-                &self.focus_settings,
-                self.focus_snapshot.as_ref(),
-            );
+            if entrance.active {
+                let cache = canvas.to_vec();
+                render::render_reveal(canvas, &cache, entrance.reflection);
+                reveal_cache = Some(cache);
+            }
         }
-        let saving = self
-            .save
-            .as_ref()
-            .is_some_and(|job| job.generation == self.activity.generation());
-        render::render_input_in(
-            canvas,
-            (width as usize, height as usize),
-            self.font.as_ref().ok_or("Font not loaded")?,
-            scale as f32,
-            content,
-            render::InputView {
-                editor: &self.activity.editor,
-                suggestions: &self.activity.suggestions(),
-                suggestion_index: self.activity.suggestion_index(),
-                saved_text: self.activity.displayed_text(),
-                progress: self.activity.typing_fraction(now),
-                message: if saving {
-                    Some("Saving…")
-                } else if let Some(error) = self.activity.error.as_deref() {
-                    Some(error)
-                } else if self.history_unavailable && !self.activity.editing() {
-                    Some("Previous reflections unavailable · type to reflect")
-                } else {
-                    None
-                },
-                editing: self.activity.editing(),
-                caret_visible: self.activity.recall.selected().is_none()
-                    && (now.as_millis() / 500).is_multiple_of(2),
-                history: Some(render::HistoryView {
-                    recall: &self.activity.recall,
-                    now,
-                    now_ms: recall::system_ms(),
-                }),
-            },
-        );
         // Seed the second buffer now, not on the user's first keystroke. This
         // avoids another full-screen/font rasterization in the typing path.
-        let seed = if fresh && self.active[index].buffers.len() == 1 {
+        let seed = if full && !entrance.active && self.active[index].buffers.len() == 1 {
             Some(canvas.to_vec())
         } else {
             None
@@ -899,8 +990,18 @@ impl App {
         let active = &self.active[index];
         let surface = active.layer.wl_surface();
         surface.set_buffer_scale(scale as i32);
-        if fresh {
+        if (entrance.active && (full_entrance || entrance.reflection > 0.0))
+            || (!entrance.active && full)
+        {
             surface.damage_buffer(0, 0, width as i32, height as i32);
+        } else if entrance.active {
+            let damage = render::breathing_damage(width as f32, height as f32, scale as f32);
+            surface.damage_buffer(
+                damage.x.floor() as i32,
+                damage.y.floor() as i32,
+                damage.width.ceil() as i32 + 1,
+                damage.height.ceil() as i32 + 1,
+            );
         } else {
             let damage = render::input_damage(content.width, content.height, scale as f32);
             surface.damage_buffer(
@@ -920,8 +1021,9 @@ impl App {
                 );
             }
         }
-        if charts_changed
-            && !fresh
+        if !entrance.active
+            && charts_changed
+            && !full
             && let Some(sidebar) = render::focus_sidebar(
                 width as f32,
                 height as f32,
@@ -939,13 +1041,25 @@ impl App {
         buffer.attach_to(surface)?;
         active.layer.commit();
         let active = &mut self.active[index];
-        active.chart_versions[buffer_index] = self.chart_revision;
+        active.chart_versions[buffer_index] = if entrance.active {
+            0
+        } else {
+            self.chart_revision
+        };
+        if let Some(cache) = reveal_cache {
+            active.reveal_cache = Some(cache);
+        }
+        active.entrance_dirty[buffer_index] = entrance.active;
+        active.entrance_backdrops[buffer_index] = background;
         if !active.mapped {
             active.mapped = true;
             if self.mapped_at.is_none() {
                 let mapped_now = boot_time();
                 self.mapped_at = Some(mapped_now);
-                self.activity.mapped(mapped_now);
+                // The normal countdown starts only after the complete entrance;
+                // early keyboard/pointer events are separately gated above.
+                self.activity
+                    .mapped(mapped_now + self.entrance.settings.duration());
             }
             let name = self
                 .outputs
@@ -963,7 +1077,13 @@ impl App {
             )?;
             canvas.copy_from_slice(&seed);
             self.active[index].buffers.push(buffer);
-            self.active[index].chart_versions.push(self.chart_revision);
+            self.active[index].chart_versions.push(if entrance.active {
+                0
+            } else {
+                self.chart_revision
+            });
+            self.active[index].entrance_dirty.push(entrance.active);
+            self.active[index].entrance_backdrops.push(background);
         }
         Ok(())
     }
@@ -1198,6 +1318,9 @@ impl PointerHandler for App {
         _: &wl_pointer::WlPointer,
         events: &[PointerEvent],
     ) {
+        if !self.reflection_ready(boot_time()) {
+            return;
+        }
         for event in events {
             let Some(active) = self
                 .active
@@ -1577,6 +1700,68 @@ mod tests {
                 .count(),
             0
         );
+    }
+
+    #[test]
+    fn breathing_cli_rejects_unbounded_or_unknown_preferences() {
+        for args in [
+            vec!["--breathing", "yes"],
+            vec!["--breath-pace", "fast"],
+            vec!["--breath-cycles", "0"],
+            vec!["--breath-cycles", "3"],
+            vec!["--breath-cycles", "256"],
+            vec!["--breath-patterns", ""],
+            vec!["--breath-patterns", "lattice,lattice"],
+            vec!["--breath-patterns", "random"],
+            vec!["--breath-patterns"],
+        ] {
+            assert!(Options::parse(args.into_iter().map(str::to_owned)).is_err());
+        }
+        let options = Options::parse(["--breathing", "off", "--reduced-motion"].map(str::to_owned))
+            .unwrap()
+            .unwrap();
+        assert!(!options.settings.breathing.enabled);
+        assert!(options.settings.breathing.reduced_motion);
+    }
+
+    #[test]
+    fn breathing_preserves_the_entire_reflection_and_typing_budgets() {
+        use crate::breathing::{Pace, Settings as BreathingSettings};
+        for enabled in [false, true] {
+            for pace in Pace::ALL {
+                for cycles in [1, 2] {
+                    let settings = BreathingSettings {
+                        enabled,
+                        pace,
+                        cycles,
+                        ..BreathingSettings::default()
+                    };
+                    let entrance = Entrance::new(settings.clone(), 42);
+                    let mapped = Duration::from_secs(10);
+                    let ready = mapped + settings.duration();
+                    let mut activity =
+                        Activity::new(Duration::from_secs(5), Duration::from_secs(30));
+                    activity.mapped(ready);
+                    assert!(!entrance.ready(None, ready));
+                    assert!(!entrance.ready(Some(mapped), ready - Duration::from_millis(1)));
+                    assert!(entrance.ready(Some(mapped), ready));
+                    assert_eq!(activity.expired(mapped), None);
+                    assert_eq!(activity.remaining(mapped), Duration::from_secs(5));
+                    assert_eq!(activity.remaining(ready), Duration::from_secs(5));
+                    assert_eq!(activity.expired(ready + Duration::from_secs(4)), None);
+                    activity.insert("Reflect", ready + Duration::from_secs(1));
+                    assert_eq!(
+                        activity.remaining(ready + Duration::from_secs(30)),
+                        Duration::from_secs(4)
+                    );
+                    assert_eq!(activity.expired(ready + Duration::from_secs(30)), None);
+                    assert_eq!(
+                        activity.expired(ready + Duration::from_secs(31)),
+                        Some(Expiry::Typing)
+                    );
+                }
+            }
+        }
     }
 
     #[test]

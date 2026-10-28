@@ -1,5 +1,9 @@
 use fontdue::Font;
 
+mod breathing;
+pub use breathing::{
+    BreathingView, breathing_background, breathing_damage, render_breathing, render_reveal,
+};
 mod charts;
 pub use charts::{ChartView, chart_damage, chart_damage_in, render_charts, render_charts_in};
 mod focus;

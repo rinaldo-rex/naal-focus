@@ -73,6 +73,16 @@ fn monitor_clients_share_controls_and_take_over_without_duplicate_timers() {
             side: config::FocusSide::Left,
             use_24_hour_time: true,
         },
+        breathing: naal_focus::breathing::Settings {
+            enabled: true,
+            reduced_motion: true,
+            pace: naal_focus::breathing::Pace::Even,
+            cycles: 2,
+            families: vec![
+                naal_focus::breathing::Family::Polygons,
+                naal_focus::breathing::Family::Weave,
+            ],
+        },
         charts: config::ChartSettings {
             style: config::ChartStyle::Treemap,
             projects: true,

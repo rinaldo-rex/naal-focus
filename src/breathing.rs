@@ -403,6 +403,9 @@ impl Entrance {
             settings,
         }
     }
+    pub fn ready(&self, mapped: Option<Duration>, now: Duration) -> bool {
+        mapped.is_some_and(|at| now >= at + self.settings.duration())
+    }
     pub fn frame(&self, elapsed: Duration) -> Frame {
         let duration = self.settings.duration();
         if !self.settings.enabled || elapsed >= duration {

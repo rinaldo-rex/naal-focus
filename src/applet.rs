@@ -149,7 +149,7 @@ impl App {
                 Message::Interval,
             ))
             .add(numeric_field(
-                "Duration (1–30 seconds)",
+                "Reflection duration (1–30 seconds)",
                 "5",
                 &self.form.duration,
                 1,
