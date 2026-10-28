@@ -20,6 +20,7 @@ pub(super) struct SettingsForm {
     pub idle_secs: String,
     pub charts: ChartSettings,
     pub focus: FocusSettings,
+    pub breathing: crate::breathing::Settings,
     pub quotes: widget::text_editor::Content<cosmic::Renderer>,
     pub error: Option<String>,
     pub dirty: bool,
@@ -36,6 +37,7 @@ impl SettingsForm {
             idle_secs: settings.idle_secs.to_string(),
             charts: settings.charts.clone(),
             focus: settings.focus.clone(),
+            breathing: settings.breathing.clone(),
             quotes: widget::text_editor::Content::with_text(&config::format_quotes(
                 &settings.quotes,
             )),
@@ -101,6 +103,7 @@ impl SettingsForm {
                 .map_err(|_| "Idle threshold needs an integer.")?,
             charts: self.charts.clone(),
             focus: self.focus.clone(),
+            breathing: self.breathing.clone(),
             quotes: config::parse_quotes(&self.quotes.text())?,
             // Enabling reminders is a quick action, not part of this draft.
             ..settings.clone()
@@ -246,6 +249,30 @@ mod tests {
         let mut clean = SettingsForm::new(&original);
         clean.sync(&saved, None);
         assert_eq!(clean.focus, saved.focus);
+    }
+
+    #[test]
+    fn breathing_preferences_keep_dirty_drafts_and_validate_families() {
+        use crate::breathing::{Family, Pace};
+        let original = Settings::default();
+        let mut form = SettingsForm::new(&original);
+        form.breathing.pace = Pace::Short;
+        form.breathing.cycles = 2;
+        form.breathing.reduced_motion = true;
+        form.breathing.families = vec![Family::Weave];
+        form.dirty = true;
+        form.sync(&original, None);
+        let saved = form.save(&original).unwrap();
+        assert_eq!(saved.breathing, form.breathing);
+        form.breathing.enabled = false;
+        assert!(form.sync(&saved, None));
+        assert!(form.dirty);
+        assert!(!form.breathing.enabled);
+        form.breathing.families.clear();
+        assert!(form.save(&original).is_err());
+        let mut clean = SettingsForm::new(&original);
+        clean.sync(&saved, None);
+        assert_eq!(clean.breathing, saved.breathing);
     }
 
     #[test]

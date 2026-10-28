@@ -62,12 +62,18 @@ Usage: naal-focus-overlay [OPTIONS]
   --focus-style STYLE  totals, timeline, or both (default)
   --focus-side SIDE    left or right (default)
   --focus-24-hour      Use 24-hour sidebar times (default: 12-hour AM/PM)
+  --breathing MODE     on (default) or off; entrance precedes reflection
+  --breath-pace PACE   short (3/4), balanced (4/6, default), even (5/5)
+  --breath-cycles N    One or two breaths (default 1)
+  --breath-patterns LIST  lattice,polygons,constellation,weave (default all)
+  --reduced-motion    Static geometry with timed breath cues
   --payload            Read the supervisor's bounded JSON quote/history payload
   --stdin              Read one raw UTF-8 quote (including line breaks) from stdin
   -h, --help           Print help
 
 WARNING: captures keyboard focus on all covered monitors. Type to reflect;
-Up/Down browse today's previous reflections; Enter recalls, then Enter saves.
+During the breathing entrance, typing is ignored and Escape dismisses all.
+Afterward, Up/Down browse today's previous reflections; Enter recalls, then Enter saves.
 Use #tags, @projects, and ??feelings; arrows select suggestions, Tab inserts.
 After saving, Enter reopens the reflection for correction (or click it).
 With suggestions open, Enter saves as written; Escape closes suggestions first.
@@ -109,6 +115,39 @@ impl Options {
                 "--payload" => options.payload = true,
                 "--focus-history" => options.settings.focus.enabled = true,
                 "--focus-24-hour" => options.settings.focus.use_24_hour_time = true,
+                "--breathing" => {
+                    options.settings.breathing.enabled = match args.next().as_deref() {
+                        Some("on") => true,
+                        Some("off") => false,
+                        _ => return Err("--breathing requires on or off.".into()),
+                    };
+                }
+                "--breath-pace" => {
+                    options.settings.breathing.pace = match args.next().as_deref() {
+                        Some("short") => crate::breathing::Pace::Short,
+                        Some("balanced") => crate::breathing::Pace::Balanced,
+                        Some("even") => crate::breathing::Pace::Even,
+                        _ => return Err("--breath-pace requires short, balanced, or even.".into()),
+                    };
+                }
+                "--breath-cycles" => {
+                    options.settings.breathing.cycles = number(&arg, args.next())?
+                        .try_into()
+                        .map_err(|_| "Choose one or two breaths.")?;
+                }
+                "--breath-patterns" => {
+                    let list = args.next().ok_or("--breath-patterns requires a list.")?;
+                    options.settings.breathing.families = list
+                        .split(',')
+                        .map(|name| {
+                            crate::breathing::Family::ALL
+                                .into_iter()
+                                .find(|f| f.as_str() == name)
+                                .ok_or_else(|| format!("Unknown breathing pattern: {name}"))
+                        })
+                        .collect::<Result<_, _>>()?;
+                }
+                "--reduced-motion" => options.settings.breathing.reduced_motion = true,
                 "--focus-style" => {
                     options.settings.focus.style = match args.next().as_deref() {
                         Some("totals") => FocusStyle::Totals,

@@ -489,7 +489,29 @@ fn helper_arguments(settings: &Settings) -> Vec<String> {
         settings.focus.style.as_str().into(),
         "--focus-side".into(),
         settings.focus.side.as_str().into(),
+        "--breathing".into(),
+        if settings.breathing.enabled {
+            "on"
+        } else {
+            "off"
+        }
+        .into(),
+        "--breath-pace".into(),
+        settings.breathing.pace.as_str().into(),
+        "--breath-cycles".into(),
+        settings.breathing.cycles.to_string(),
+        "--breath-patterns".into(),
+        settings
+            .breathing
+            .families
+            .iter()
+            .map(|f| f.as_str())
+            .collect::<Vec<_>>()
+            .join(","),
     ];
+    if settings.breathing.reduced_motion {
+        arguments.push("--reduced-motion".into());
+    }
     if settings.focus.enabled {
         arguments.push("--focus-history".into());
     }
@@ -561,6 +583,42 @@ mod tests {
             helper.settings.helper_lifetime_secs(),
             settings.helper_lifetime_secs()
         );
+    }
+
+    #[test]
+    fn helper_receives_every_breathing_preference_and_watchdog_budget() {
+        use crate::breathing::{Family, Pace};
+        for mask in 1..16 {
+            for enabled in [false, true] {
+                for pace in Pace::ALL {
+                    for cycles in [1, 2] {
+                        let settings = Settings {
+                            breathing: crate::breathing::Settings {
+                                enabled,
+                                pace,
+                                cycles,
+                                reduced_motion: mask % 2 == 0,
+                                families: Family::ALL
+                                    .into_iter()
+                                    .enumerate()
+                                    .filter_map(|(i, f)| (mask & (1 << i) != 0).then_some(f))
+                                    .collect(),
+                            },
+                            ..Settings::default()
+                        };
+                        settings.validate().unwrap();
+                        let helper = crate::overlay::Options::parse(helper_arguments(&settings))
+                            .unwrap()
+                            .unwrap();
+                        assert_eq!(helper.settings.breathing, settings.breathing);
+                        assert_eq!(
+                            helper.settings.helper_lifetime_secs(),
+                            settings.helper_lifetime_secs()
+                        );
+                    }
+                }
+            }
+        }
     }
 
     #[test]

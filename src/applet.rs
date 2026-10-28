@@ -77,6 +77,11 @@ pub enum Message {
     FocusStyle(usize),
     FocusSide(usize),
     Focus24Hour(bool),
+    BreathingEnabled(bool),
+    BreathingReducedMotion(bool),
+    BreathingPace(usize),
+    BreathingCycles(usize),
+    BreathingFamily(crate::breathing::Family, bool),
     Quotes(widget::text_editor::Action),
     Save,
     WindowFocus { id: Id, focused: bool },
@@ -86,6 +91,8 @@ pub enum Message {
 const CHART_STYLES: [&str; 2] = ["Heatmap — hourly mentions", "Treemap — daily mentions"];
 const FOCUS_STYLES: [&str; 3] = ["Time spent", "Day timeline", "Timeline + totals"];
 const FOCUS_SIDES: [&str; 2] = ["Left", "Right"];
+const BREATH_PACES: [&str; 3] = ["3s in / 4s out", "4s in / 6s out", "5s in / 5s out"];
+const BREATH_COUNTS: [&str; 2] = ["One breath", "Two breaths"];
 
 impl App {
     fn quick_controls(&self) -> Element<'_, Message> {
@@ -167,6 +174,46 @@ impl App {
                 72,
                 Message::TextSize,
             ));
+        let mut breathing = widget::settings::section()
+            .title("Breathing entrance")
+            .add(widget::settings::item(
+                "Breathe before reflecting",
+                widget::toggler(self.form.breathing.enabled).on_toggle(Message::BreathingEnabled),
+            ))
+            .add(widget::settings::item(
+                "Reduced motion",
+                widget::toggler(self.form.breathing.reduced_motion)
+                    .on_toggle(Message::BreathingReducedMotion),
+            ))
+            .add(widget::settings::item(
+                "Pace",
+                widget::dropdown(
+                    &BREATH_PACES[..],
+                    crate::breathing::Pace::ALL
+                        .iter()
+                        .position(|pace| *pace == self.form.breathing.pace),
+                    Message::BreathingPace,
+                ),
+            ))
+            .add(widget::settings::item(
+                "Breaths",
+                widget::dropdown(
+                    &BREATH_COUNTS[..],
+                    Some(usize::from(self.form.breathing.cycles.saturating_sub(1))),
+                    Message::BreathingCycles,
+                ),
+            ));
+        for family in crate::breathing::Family::ALL {
+            breathing = breathing.add(widget::settings::item(
+                family.label(),
+                widget::toggler(self.form.breathing.families.contains(&family))
+                    .on_toggle(move |enabled| Message::BreathingFamily(family, enabled)),
+            ));
+        }
+        if let Err(error) = self.form.breathing.validate() {
+            breathing = breathing
+                .add(widget::text(error).class(cosmic::theme::Text::Custom(error_text_style)));
+        }
         let charts = widget::settings::section()
             .title("Overlay charts")
             .add(widget::settings::item(
@@ -257,6 +304,7 @@ impl App {
             .push(widget::text(&self.status.message))
             .push(timing)
             .push(appearance)
+            .push(breathing)
             .push(charts)
             .push(focus)
             .push(reflection)
@@ -659,6 +707,33 @@ impl cosmic::Application for App {
             }
             Message::Focus24Hour(enabled) => {
                 self.form.focus.use_24_hour_time = enabled;
+                self.form.dirty = true;
+            }
+            Message::BreathingEnabled(enabled) => {
+                self.form.breathing.enabled = enabled;
+                self.form.dirty = true;
+            }
+            Message::BreathingReducedMotion(enabled) => {
+                self.form.breathing.reduced_motion = enabled;
+                self.form.dirty = true;
+            }
+            Message::BreathingPace(index) => {
+                if let Some(pace) = crate::breathing::Pace::ALL.get(index) {
+                    self.form.breathing.pace = *pace;
+                    self.form.dirty = true;
+                }
+            }
+            Message::BreathingCycles(index) => {
+                if index < 2 {
+                    self.form.breathing.cycles = index as u8 + 1;
+                    self.form.dirty = true;
+                }
+            }
+            Message::BreathingFamily(family, enabled) => {
+                self.form.breathing.families.retain(|f| *f != family);
+                if enabled {
+                    self.form.breathing.families.push(family);
+                }
                 self.form.dirty = true;
             }
             Message::Quotes(action) => {
