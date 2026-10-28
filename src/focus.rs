@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, time::Duration};
 
 pub mod store;
+pub mod tracker;
 
 pub const MAX_SESSIONS: usize = 20_000;
 pub const MAX_TITLE_CHARS: usize = 256;
@@ -97,7 +98,10 @@ impl Day {
                 || session.start_ms < end
                 || session.end_ms > now_ms
                 || session.duration_ms == 0
-                || session.duration_ms > session.end_ms - session.start_ms + 1000
+                || session.duration_ms
+                    > (session.end_ms - session.start_ms)
+                        .saturating_add(1000)
+                        .saturating_add((session.end_ms - session.start_ms) / 1000)
                 || day_key(to_local(session.start_ms)) != self.date
                 || day_key(to_local(session.end_ms.saturating_sub(1))) != self.date
             {
@@ -168,6 +172,7 @@ pub struct Snapshot {
 #[derive(Default)]
 pub struct Clock {
     previous: Option<(Duration, u64, Option<Window>, bool)>,
+    fractional: Duration,
 }
 impl Clock {
     pub fn observe(
@@ -186,27 +191,40 @@ impl Clock {
         let Some((old_boot, old_wall, old_window, old_allowed)) = previous else {
             return Ok(rolled);
         };
-        let elapsed = boot
-            .saturating_sub(old_boot)
-            .as_millis()
-            .min(u64::MAX as u128) as u64;
+        let elapsed = boot.saturating_sub(old_boot);
         if rolled
             || !allowed
             || !old_allowed
-            || elapsed == 0
-            || elapsed > 3000
-            || wall <= old_wall
-            || (wall - old_wall).abs_diff(elapsed) > 1000
+            || elapsed.is_zero()
+            || elapsed > Duration::from_secs(3)
+            || wall < old_wall
+            || (wall - old_wall).abs_diff(elapsed.as_millis() as u64) > 1000
         {
+            self.fractional = Duration::ZERO;
             return Ok(rolled);
         }
         let Some(window) = old_window else {
+            self.fractional = Duration::ZERO;
             return Ok(rolled);
         };
         // A backwards clock must not create overlapping/duplicated history.
         if day.sessions.last().is_some_and(|s| old_wall < s.end_ms) {
+            self.fractional = Duration::ZERO;
             return Ok(rolled);
         }
+        // Busy compositor event streams can dispatch faster than 1 ms. Carry
+        // fractions rather than rounding every dispatch down and losing time.
+        let accumulated = elapsed + self.fractional;
+        if accumulated > Duration::from_secs(3) {
+            self.fractional = Duration::ZERO;
+            return Ok(rolled);
+        }
+        let elapsed = accumulated.as_millis() as u64;
+        if elapsed == 0 || wall == old_wall {
+            self.fractional = accumulated;
+            return Ok(rolled);
+        }
+        self.fractional = accumulated - Duration::from_millis(elapsed);
         if let Some(last) = day.sessions.last_mut()
             && last.window == window
             && last.end_ms == old_wall
@@ -326,6 +344,115 @@ mod tests {
             .unwrap();
         assert_eq!(day.total_ms(), 1000);
     }
+    #[test]
+    fn fast_compositor_dispatches_do_not_round_away_window_time() {
+        let mut clock = Clock::default();
+        let mut day = Day::empty(START);
+        for sample in 0..=10_000 {
+            let micros = sample * 100;
+            clock
+                .observe(
+                    &mut day,
+                    Duration::from_micros(micros),
+                    START + micros / 1000,
+                    window("A"),
+                    true,
+                )
+                .unwrap();
+        }
+        assert_eq!(day.total_ms(), 1000);
+        assert_eq!(day.sessions.len(), 1);
+        day.validate(day.observed_ms).unwrap();
+    }
+
+    #[test]
+    fn small_clock_slews_keep_monotonic_time_and_remain_valid() {
+        let mut clock = Clock::default();
+        let mut day = Day::empty(START);
+        for second in 0..4000 {
+            clock
+                .observe(
+                    &mut day,
+                    Duration::from_secs(second),
+                    START + second * 999,
+                    window("A"),
+                    true,
+                )
+                .unwrap();
+        }
+        // This fixture may cross midnight; only the retained day is relevant.
+        day.validate(day.observed_ms).unwrap();
+        assert!(day.total_ms() > 0);
+    }
+
+    #[test]
+    fn session_limit_is_explicit_and_a_new_day_recovers() {
+        let mut clock = Clock::default();
+        let mut day = Day::empty(START);
+        for i in 0..=MAX_SESSIONS as u64 {
+            clock
+                .observe(
+                    &mut day,
+                    Duration::from_millis(i),
+                    START + i,
+                    window(&i.to_string()),
+                    true,
+                )
+                .unwrap();
+        }
+        assert_eq!(day.sessions.len(), MAX_SESSIONS);
+        assert!(
+            clock
+                .observe(
+                    &mut day,
+                    Duration::from_millis(MAX_SESSIONS as u64 + 1),
+                    START + MAX_SESSIONS as u64 + 1,
+                    window("full"),
+                    true
+                )
+                .unwrap_err()
+                .contains("full")
+        );
+        let next_day = START + 86_400_000;
+        clock
+            .observe(
+                &mut day,
+                Duration::from_millis(86_400_000),
+                next_day,
+                window("new"),
+                true,
+            )
+            .unwrap();
+        assert!(day.sessions.is_empty());
+    }
+
+    #[test]
+    fn unknown_and_own_windows_leave_gaps() {
+        let mut clock = Clock::default();
+        let mut day = Day::empty(START);
+        for (second, current) in [
+            (0, window("A")),
+            (1, window("A")),
+            (2, None),
+            (3, None),
+            (4, Some(Window::new(crate::config::APP_ID, "Settings"))),
+            (5, window("A")),
+            (6, window("A")),
+        ] {
+            clock
+                .observe(
+                    &mut day,
+                    Duration::from_secs(second),
+                    START + second * 1000,
+                    current,
+                    true,
+                )
+                .unwrap();
+        }
+        assert_eq!(day.total_ms(), 3000);
+        assert_eq!(day.sessions.len(), 2);
+    }
+
     #[test]
     fn rollover_forgets_every_old_title_without_bridging_days() {
         let mut clock = Clock::default();

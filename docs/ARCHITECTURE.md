@@ -20,6 +20,7 @@ flowchart TD
 | `Engine` (`src/engine.rs`) | Background control client or elected supervisor. Publishes shared status, applies requests, and owns at most one helper. |
 | `Schedule` (`src/schedule.rs`) | Pure interval, snooze, and sequential quote-rotation policy. |
 | `Guard` (`src/guard.rs`) | Checks session state through system D-Bus/logind and input idle state through Wayland. |
+| Focus tracker (`src/focus.rs`, `src/focus/`) | Opt-in supervisor-owned COSMIC window observer, monotonic interval accounting, and one private current-day file. |
 | `naal-focus-overlay` (`src/bin/overlay.rs`, `src/overlay.rs`) | Displays one reminder using one layer-shell surface per selected output. Has no recurring timer. |
 | Renderer (`src/render.rs`) | Rasterizes text into shared-memory ARGB8888 buffers using a local font; caches the quote and repaints only the history/input strip during editing and dial motion. |
 | Reflection state (`src/activity.rs`) | Pure UTF-8 editor, held/resumed countdown, fixed typing allowance, and accepted-text/correction state. |
@@ -31,7 +32,7 @@ flowchart TD
 | Settings (`src/config.rs`) | Validates preferences and quote syntax; loads and atomically saves JSON. |
 | Process boundaries (`src/process.rs`) | Desktop compositor routing, runtime locks, boot-time clock, and helper cleanup. |
 
-The supervisor sends one selected quote to the helper as bounded UTF-8 on stdin, rather than placing quote text in process arguments. The helper creates coordinated overlays with one shared reflection state. Only Enter-submitted text and its explicit metadata are persisted; raw keys are never recorded. Escape cancels a draft before ordinary dismissal; background clicks never cancel or dismiss; timeout, compositor closure, or output hotplug dismisses all surfaces.
+The supervisor sends the selected quote and optional focus-history snapshot as bounded JSON on stdin, never placing private text in process arguments. A dedicated writer thread prevents a stopped pipe reader from blocking the supervisor's safety watchdog. The helper validates the entire payload before creating any surfaces; legacy raw-quote `--stdin` remains supported. The helper creates coordinated overlays with one shared reflection state. Reflection history contains only Enter-submitted text and its explicit metadata; raw keys are never recorded. Automatic window history is a separate, off-by-default opt-in described below. Escape cancels a draft before ordinary dismissal; background clicks never cancel or dismiss; timeout, compositor closure, or output hotplug dismisses all surfaces.
 
 ## Reflection state and persistence
 
@@ -54,6 +55,18 @@ Chart preferences default to all categories off, preserving old version-1 settin
 The recall worker builds chart counts from the same filtered, read-only local-day snapshot before grouping consecutive reflection texts. Thus repeated saved moments remain separate counts. Normalized metadata is deduplicated per value per entry; no draft text or inferred duration contributes. Compact per-ID observations support replacing earlier metadata counts on correction. Reconciling this reminder's latest acknowledged entry into a late history result is an upsert, so a snapshot already containing it does not count it twice. Legacy ID-less records are counted independently. The renderer uses a bounded top-four view, merging overflow into Other without discarding mentions.
 
 Charts are noninteractive and share one aggregate snapshot across outputs. Missing history renders empty, while pending and failed reads get explicit states. Local hour rollover reveals the next heatmap column; local day rollover clears yesterday's counts. A reminder is a snapshot plus its own acknowledged writes, not a live subscription to external history writers. Unusually small desktop outputs omit the band to protect the existing quote and reflection controls. None of these states changes focus, key routing, dismissal, or watchdog policy.
+
+## Foreground-window history
+
+The elected supervisor owns exactly one tracker worker, independent of the reminder enabled/snooze state. A second process lock covers the worker lifetime and final flush across supervisor takeover. Other panel instances relay only preferences and a generic focus-error status; window titles never enter the shared D-Bus status payload. No compositor window-list subscription is created until tracking is enabled.
+
+The worker connects to the validated desktop socket, not the nested panel socket. It combines `ext_foreign_toplevel_list_v1` identity/title events with `zcosmic_toplevel_info_v1` version 2 activation state. Unknown or multiple active windows are gaps, never simultaneous measured work. Application IDs/titles are bounded and sanitized before retention; only the selected foreground window is persisted. Loss of either protocol makes tracking unavailable and retries without affecting reminders.
+
+The supervisor publishes a short-lived collection permission/heartbeat from the existing safety guards, suppressing accounting before spawning a helper and throughout its lifetime. A stale heartbeat, a worker scheduling gap, suspend, unsafe session, missing active window, or wall-clock discontinuity discards the uncertain interval. `Clock` uses monotonic durations with fractional carry for fast event streams; wall timestamps only locate sessions on today's timeline. Consecutive intervals with the same application/title merge. New processes never bridge the unobserved restart gap.
+
+The worker maintains a shared in-memory `Day`; the supervisor clones it once per reminder. Disk I/O and JSON pipe serialization never hold the supervisor/render/input path. One owner-checked `focus.json` snapshot is atomically replaced every 15 seconds and when collection pauses. The activity directory's existing advisory lock serializes replacement against reflection operations. Only the current local date is retained; startup/day rollover remove stale records even when collection is disabled. Reserved crash scratch files are removed under the same lock. If the application is closed at midnight, cleanup necessarily waits for its next startup. Storage/cleanup failures remain explicit errors, separate from protocol failures.
+
+The native sidebar is noninteractive. A horizontal content viewport reserves its space consistently for quote layout, mention charts, reflection rendering, surface damage, and pointer coordinates. Existing charts and input cannot repaint the sidebar. Both render buffers cache the same snapshot; shared chart revisions refresh it only when needed, not on ordinary typing/caret motion. All three styles and both sides share the same bounded data and per-application colors. Small desktop outputs omit only the column, not collection or reminder controls. No focus durations are inferred for reflections or added to the dashboard.
 
 ## Activity dashboard
 
@@ -83,7 +96,7 @@ UI status is sampled rather than instantaneous: the owner processes its loop abo
 
 ## Quick controls and settings window
 
-The popup contains only status, immediate reminder controls, and a Settings… entry point. The separate resizable desktop window groups configuration into Timing, Appearance, Overlay charts, and Reflection, with a native quote editor and explicit Save.
+The popup contains only status, immediate reminder controls, and a Settings… entry point. The separate resizable desktop window groups configuration into Timing, Appearance, Overlay charts, Focus history, and Reflection, with a native quote editor and explicit Save.
 
 `src/applet/launch.rs` launches the same binary with `--settings`, detached from the panel lifetime. It removes nested/privileged Wayland socket variables, resets panel scaling and stale launch-token overrides, and routes `WAYLAND_DISPLAY` to the validated desktop socket. COSMIC's applet-token subscription obtains a host-compositor activation token through the privileged channel; a panel-local token cannot authorize desktop focus. The window consumes the startup token after opening, while libcosmic handles tokens forwarded over its D-Bus activation interface for an existing window.
 

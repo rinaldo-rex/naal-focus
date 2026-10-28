@@ -1,5 +1,5 @@
 use crate::{
-    config::{self, ChartStyle, Settings},
+    config::{self, ChartStyle, FocusSide, FocusStyle, Settings},
     dashboard::PendingOpen,
     engine::{Engine, Request, Status},
 };
@@ -73,6 +73,9 @@ pub enum Message {
     ChartProjects(bool),
     ChartFeelings(bool),
     ChartTags(bool),
+    FocusEnabled(bool),
+    FocusStyle(usize),
+    FocusSide(usize),
     Quotes(widget::text_editor::Action),
     Save,
     WindowFocus { id: Id, focused: bool },
@@ -80,6 +83,8 @@ pub enum Message {
 }
 
 const CHART_STYLES: [&str; 2] = ["Heatmap — hourly mentions", "Treemap — daily mentions"];
+const FOCUS_STYLES: [&str; 3] = ["Time spent", "Day timeline", "Timeline + totals"];
+const FOCUS_SIDES: [&str; 2] = ["Left", "Right"];
 
 impl App {
     fn quick_controls(&self) -> Element<'_, Message> {
@@ -115,6 +120,9 @@ impl App {
         );
         if let Some(error) = self.launch_error.as_ref().or(self.status.error.as_ref()) {
             content = content.push(widget::text(format!("⚠ {error}")).size(13));
+        }
+        if let Some(error) = &self.status.focus_error {
+            content = content.push(widget::text(format!("⚠ {error}")).size(12));
         }
         widget::scrollable(content.padding(16))
             .width(iced::Length::Fill)
@@ -184,6 +192,38 @@ impl App {
                 widget::toggler(self.form.charts.tags).on_toggle(Message::ChartTags),
             ))
             .add(widget::text("Today’s saved mentions, not time spent. All switches off hides charts. Heatmap shows hourly counts; Treemap shows daily totals.").size(12));
+        let focus = widget::settings::section()
+            .title("Focus history")
+            .add(widget::settings::item(
+                "Track window time",
+                widget::toggler(self.form.focus.enabled).on_toggle(Message::FocusEnabled),
+            ))
+            .add(widget::settings::item(
+                "Graph",
+                widget::dropdown(
+                    &FOCUS_STYLES[..],
+                    Some(match self.form.focus.style {
+                        FocusStyle::Totals => 0,
+                        FocusStyle::Timeline => 1,
+                        FocusStyle::Both => 2,
+                    }),
+                    Message::FocusStyle,
+                ),
+            ))
+            .add(widget::settings::item(
+                "Sidebar",
+                widget::dropdown(
+                    &FOCUS_SIDES[..],
+                    Some(match self.form.focus.side {
+                        FocusSide::Left => 0,
+                        FocusSide::Right => 1,
+                    }),
+                    Message::FocusSide,
+                ),
+            ))
+            .add(
+                widget::text("App names and window titles · Today only · Stored locally").size(12),
+            );
         let reflection = widget::settings::section()
             .title("Reflection")
             .add(numeric_field(
@@ -213,6 +253,7 @@ impl App {
             .push(timing)
             .push(appearance)
             .push(charts)
+            .push(focus)
             .push(reflection)
             .push(widget::button::suggested("Save settings").on_press(Message::Save))
             .push(
@@ -221,6 +262,9 @@ impl App {
                 )
                 .size(12),
             );
+        if let Some(error) = &self.status.focus_error {
+            content = content.push(widget::text(format!("⚠ {error}")).size(12));
+        }
         if self.form.dirty {
             content =
                 content.push(widget::text("Unsaved edits — Save settings to apply.").size(12));
@@ -590,6 +634,24 @@ impl cosmic::Application for App {
                 self.form.charts.tags = enabled;
                 self.form.dirty = true;
             }
+            Message::FocusEnabled(enabled) => {
+                self.form.focus.enabled = enabled;
+                self.form.dirty = true;
+            }
+            Message::FocusStyle(index) => {
+                if let Some(style) =
+                    [FocusStyle::Totals, FocusStyle::Timeline, FocusStyle::Both].get(index)
+                {
+                    self.form.focus.style = *style;
+                    self.form.dirty = true;
+                }
+            }
+            Message::FocusSide(index) => {
+                if let Some(side) = [FocusSide::Left, FocusSide::Right].get(index) {
+                    self.form.focus.side = *side;
+                    self.form.dirty = true;
+                }
+            }
             Message::Quotes(action) => {
                 self.form.dirty |= action.is_edit();
                 self.form.quotes.perform(action);
@@ -678,6 +740,7 @@ mod tests {
             settings: Settings::default(),
             message: String::new(),
             error: None,
+            focus_error: None,
             running: false,
             safe: true,
             next_secs: 300,

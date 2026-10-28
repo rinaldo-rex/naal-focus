@@ -1,6 +1,7 @@
 //! A single supervisor thread owns the timer and at most one one-shot helper.
 use crate::{
     config::{self, Settings},
+    focus::{self, tracker::Tracker},
     guard::Guard,
     process::{ManagedChild, Singleton, boot_time, helper_command},
     schedule::Schedule,
@@ -27,6 +28,8 @@ pub struct Status {
     pub settings: Settings,
     pub message: String,
     pub error: Option<String>,
+    #[serde(default)]
+    pub focus_error: Option<String>,
     pub running: bool,
     pub safe: bool,
     pub next_secs: u64,
@@ -54,6 +57,7 @@ impl Engine {
             settings: settings.clone(),
             message: "Starting safety checks…".into(),
             error: load_error.clone(),
+            focus_error: None,
             running: false,
             safe: false,
             next_secs: settings.interval_secs,
@@ -279,6 +283,7 @@ fn supervise(
     settings.validate()?;
     let _singleton = Singleton::acquire("applet")?;
     let mut guard = Guard::start(settings.idle_secs);
+    let tracker = Tracker::start();
     let mut schedule = Schedule::new(boot_time(), &settings);
     if let Some(seconds) = shared.lock().unwrap().snoozed_secs {
         schedule.snooze(boot_time(), Duration::from_secs(seconds), &settings);
@@ -321,6 +326,7 @@ fn supervise(
             }
         }
         let safe = blocked.is_none();
+        tracker.update(settings.focus.enabled, safe && child.is_none() && !gap);
         let due = schedule.tick(now, &settings, safe, child.is_some());
         let manual_due = manual_at.is_some_and(|at| now >= at);
         if manual_due {
@@ -328,8 +334,11 @@ fn supervise(
         }
         if due || manual_due {
             if safe && child.is_none() {
+                // Suppress accounting before creating any focus-capturing surface.
+                tracker.update(settings.focus.enabled, false);
+                let snapshot = settings.focus.enabled.then(|| tracker.snapshot());
                 let quote = schedule.take_quote(&settings);
-                match launch(&settings, quote) {
+                match launch(&settings, quote, snapshot) {
                     Ok(helper) => {
                         child = Some((
                             helper,
@@ -357,6 +366,7 @@ fn supervise(
         {
             let mut status = shared.lock().unwrap();
             status.settings = settings.clone();
+            status.focus_error = tracker.error(settings.focus.enabled);
             status.running = child.is_some();
             status.safe = safe;
             status.next_secs = schedule.remaining(now).as_secs();
@@ -446,7 +456,7 @@ fn supervise(
     }
 }
 
-fn helper_arguments(settings: &Settings) -> [String; 13] {
+fn helper_arguments(settings: &Settings) -> Vec<String> {
     let categories = settings
         .charts
         .kinds()
@@ -457,8 +467,8 @@ fn helper_arguments(settings: &Settings) -> [String; 13] {
         })
         .collect::<Vec<_>>()
         .join(",");
-    [
-        "--stdin".into(),
+    let mut arguments = vec![
+        "--payload".into(),
         "--duration-secs".into(),
         settings.duration_secs.to_string(),
         "--typing-limit-secs".into(),
@@ -475,10 +485,22 @@ fn helper_arguments(settings: &Settings) -> [String; 13] {
         } else {
             categories
         },
-    ]
+        "--focus-style".into(),
+        settings.focus.style.as_str().into(),
+        "--focus-side".into(),
+        settings.focus.side.as_str().into(),
+    ];
+    if settings.focus.enabled {
+        arguments.push("--focus-history".into());
+    }
+    arguments
 }
 
-fn launch(settings: &Settings, quote: &str) -> Result<ManagedChild, String> {
+fn launch(
+    settings: &Settings,
+    quote: &str,
+    focus: Option<focus::Snapshot>,
+) -> Result<ManagedChild, String> {
     let mut command = helper_command()?;
     command
         .args(helper_arguments(settings))
@@ -490,12 +512,21 @@ fn launch(settings: &Settings, quote: &str) -> Result<ManagedChild, String> {
             .spawn()
             .map_err(|e| format!("Cannot launch overlay: {e}"))?,
     );
-    // Quotes are sent as bounded UTF-8 on stdin, not visible in process arguments.
+    // Private titles and quotes never appear in arguments or on D-Bus status.
+    // A stopped reader must not stall the supervisor's safety watchdog.
     let mut stdin = child.0.stdin.take().ok_or("Helper stdin unavailable.")?;
-    stdin
-        .write_all(quote.as_bytes())
-        .map_err(|e| e.to_string())?;
-    drop(stdin);
+    let payload = crate::overlay::Payload {
+        quote: quote.to_owned(),
+        focus,
+    };
+    std::thread::Builder::new()
+        .name("overlay-payload".into())
+        .spawn(move || {
+            if serde_json::to_writer(&mut stdin, &payload).is_err() || stdin.flush().is_err() {
+                eprintln!("Overlay payload transfer failed.");
+            }
+        })
+        .map_err(|_| "Cannot start overlay payload transfer.")?;
     Ok(child)
 }
 
@@ -516,7 +547,8 @@ mod tests {
         let helper = crate::overlay::Options::parse(helper_arguments(&settings))
             .unwrap()
             .unwrap();
-        assert!(helper.stdin);
+        assert!(helper.payload);
+        assert!(!helper.stdin);
         assert_eq!(helper.settings.duration_secs, 30);
         assert_eq!(helper.settings.typing_limit_secs, 600);
         assert_eq!(helper.settings.text_size, 48);
@@ -526,6 +558,35 @@ mod tests {
             helper.settings.helper_lifetime_secs(),
             settings.helper_lifetime_secs()
         );
+    }
+
+    #[test]
+    fn helper_receives_every_focus_preference_without_private_data_in_arguments() {
+        for style in [
+            crate::config::FocusStyle::Totals,
+            crate::config::FocusStyle::Timeline,
+            crate::config::FocusStyle::Both,
+        ] {
+            for side in [
+                crate::config::FocusSide::Left,
+                crate::config::FocusSide::Right,
+            ] {
+                for enabled in [false, true] {
+                    let settings = Settings {
+                        focus: crate::config::FocusSettings {
+                            enabled,
+                            style,
+                            side,
+                        },
+                        ..Settings::default()
+                    };
+                    let arguments = helper_arguments(&settings);
+                    assert_eq!(arguments[0], "--payload");
+                    let helper = crate::overlay::Options::parse(arguments).unwrap().unwrap();
+                    assert_eq!(helper.settings.focus, settings.focus);
+                }
+            }
+        }
     }
 
     #[test]

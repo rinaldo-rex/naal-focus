@@ -32,7 +32,7 @@ fn check_file(file: &File) -> Result<(), String> {
     activity_log::check_owner(file)?;
     let metadata = file.metadata().map_err(|e| e.to_string())?;
     if !metadata.is_file() || metadata.nlink() != 1 {
-        return Err("Focus history must be a regular, unlinked private file.".into());
+        return Err("Focus history must be a regular file with a single hard link.".into());
     }
     Ok(())
 }
@@ -46,6 +46,7 @@ pub fn load_today_in(directory: &Path, now_ms: u64) -> Result<Day, String> {
     activity_log::lock(&dir)?;
     // A crash between writing and renaming must not leave a hidden archive of
     // titles. Only our reserved, owner-checked regular scratch files are removed.
+    let mut removed_scratch = false;
     for entry in std::fs::read_dir(format!("/proc/self/fd/{}", dir.as_raw_fd()))
         .map_err(|e| e.to_string())?
     {
@@ -61,6 +62,10 @@ pub fn load_today_in(directory: &Path, now_ms: u64) -> Result<Day, String> {
         if unsafe { libc::unlinkat(dir.as_raw_fd(), name.as_ptr(), 0) } != 0 {
             return Err(std::io::Error::last_os_error().to_string());
         }
+        removed_scratch = true;
+    }
+    if removed_scratch {
+        dir.sync_all().map_err(|e| e.to_string())?;
     }
     let mut file = match activity_log::open_at(&dir, NAME, libc::O_RDONLY) {
         Ok(file) => file,

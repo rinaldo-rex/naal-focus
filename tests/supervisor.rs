@@ -43,6 +43,7 @@ fn monitor_clients_share_controls_and_take_over_without_duplicate_timers() {
     wait_until(|| owner.status().safe);
     assert!(!owner.status().settings.enabled);
     assert!(!owner.status().running);
+    wait_until(|| Singleton::acquire("focus-tracker").is_err());
 
     let second = Engine::start(Settings::default(), Some(path.clone()), None);
     let third = Engine::start(Settings::default(), Some(path.clone()), None);
@@ -65,6 +66,12 @@ fn monitor_clients_share_controls_and_take_over_without_duplicate_timers() {
     let settings = Settings {
         interval_secs: 60,
         typing_limit_secs: 600,
+        // Preferences synchronize without enabling collection of real titles.
+        focus: config::FocusSettings {
+            enabled: false,
+            style: config::FocusStyle::Timeline,
+            side: config::FocusSide::Left,
+        },
         charts: config::ChartSettings {
             style: config::ChartStyle::Treemap,
             projects: true,
@@ -128,5 +135,6 @@ fn monitor_clients_share_controls_and_take_over_without_duplicate_timers() {
     assert!(!third.status().settings.enabled);
     drop(third);
     wait_until(|| Singleton::acquire("applet").is_ok());
+    wait_until(|| Singleton::acquire("focus-tracker").is_ok());
     fs::remove_dir_all(dir).unwrap();
 }

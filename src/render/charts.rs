@@ -33,6 +33,12 @@ pub fn chart_damage(width: f32, height: f32, scale: f32, settings: &ChartSetting
     })
 }
 
+pub fn chart_damage_in(content: Rect, scale: f32, settings: &ChartSettings) -> Option<Rect> {
+    let mut band = chart_damage(content.width, content.height, scale, settings)?;
+    band.x += content.x;
+    Some(band)
+}
+
 pub fn render_charts(
     canvas: &mut [u8],
     size: (usize, usize),
@@ -40,8 +46,31 @@ pub fn render_charts(
     scale: f32,
     view: ChartView<'_>,
 ) {
+    render_charts_in(
+        canvas,
+        size,
+        font,
+        scale,
+        Rect {
+            x: 0.0,
+            y: 0.0,
+            width: size.0 as f32,
+            height: size.1 as f32,
+        },
+        view,
+    );
+}
+
+pub fn render_charts_in(
+    canvas: &mut [u8],
+    size: (usize, usize),
+    font: &Font,
+    scale: f32,
+    content: Rect,
+    view: ChartView<'_>,
+) {
     let (width, height) = size;
-    let Some(band) = chart_damage(width as f32, height as f32, scale, view.settings) else {
+    let Some(band) = chart_damage_in(content, scale, view.settings) else {
         return;
     };
     let mut image = Image {

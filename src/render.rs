@@ -1,7 +1,9 @@
 use fontdue::Font;
 
 mod charts;
-pub use charts::{ChartView, chart_damage, render_charts};
+pub use charts::{ChartView, chart_damage, chart_damage_in, render_charts, render_charts_in};
+mod focus;
+pub use focus::{focus_content, focus_sidebar, render_focus};
 
 const BACKGROUND: [u8; 4] = [20, 23, 29, 225];
 
@@ -36,15 +38,50 @@ pub fn render_with_charts(
     scale: f32,
     charts: &crate::config::ChartSettings,
 ) {
+    render_overlay(
+        canvas,
+        size,
+        font,
+        scale,
+        OverlayView {
+            quote,
+            text_size,
+            charts,
+            focus: &crate::config::FocusSettings::default(),
+        },
+    );
+}
+
+pub struct OverlayView<'a> {
+    pub quote: &'a str,
+    pub text_size: f32,
+    pub charts: &'a crate::config::ChartSettings,
+    pub focus: &'a crate::config::FocusSettings,
+}
+
+pub fn render_overlay(
+    canvas: &mut [u8],
+    size: (usize, usize),
+    font: &Font,
+    scale: f32,
+    view: OverlayView<'_>,
+) {
     let (width, height) = size;
+    let OverlayView {
+        quote,
+        text_size,
+        charts,
+        focus,
+    } = view;
+    let content = focus_content(width as f32, height as f32, scale, focus);
     let bg = premultiply(BACKGROUND);
     for pixel in canvas.chunks_exact_mut(4) {
         pixel.copy_from_slice(&bg);
     }
-    let max_width = (width as f32 * 0.8).min(1100.0 * scale);
+    let max_width = (content.width * 0.8).min(1100.0 * scale);
     // Quote, charts, and the existing history/input strip never overlap.
-    let quote_bottom = chart_damage(width as f32, height as f32, scale, charts).map_or_else(
-        || input_damage(width as f32, height as f32, scale).y,
+    let quote_bottom = chart_damage_in(content, scale, charts).map_or_else(
+        || input_damage(content.width, content.height, scale).y,
         |rect| rect.y,
     );
     let quote_height = (quote_bottom - 20.0 * scale).max(0.0);
@@ -63,9 +100,9 @@ pub fn render_with_charts(
         width,
         height,
         clip: Rect {
-            x: 0.0,
+            x: content.x,
             y: 0.0,
-            width: width as f32,
+            width: content.width,
             height: quote_height,
         },
     };
@@ -166,7 +203,7 @@ struct Image<'a> {
 }
 impl Image<'_> {
     fn text(&mut self, font: &Font, text: &str, size: f32, top: f32, rgb: [u8; 3]) {
-        let left = (self.width as f32 - text_width(font, text, size)) / 2.0;
+        let left = self.clip.x + (self.clip.width - text_width(font, text, size)) / 2.0;
         self.text_at(font, text, size, left, top, rgb);
     }
     fn text_at(&mut self, font: &Font, text: &str, size: f32, pen_x: f32, top: f32, rgb: [u8; 3]) {
@@ -560,20 +597,42 @@ pub fn render_input(
     scale: f32,
     view: InputView<'_>,
 ) {
-    let field = input_rect(width as f32, height as f32, scale);
-    let mut image = Image {
+    render_input_in(
         canvas,
-        width,
-        height,
-        clip: Rect {
+        (width, height),
+        font,
+        scale,
+        Rect {
             x: 0.0,
             y: 0.0,
             width: width as f32,
             height: height as f32,
         },
+        view,
+    );
+}
+
+pub fn render_input_in(
+    canvas: &mut [u8],
+    size: (usize, usize),
+    font: &Font,
+    scale: f32,
+    content: Rect,
+    view: InputView<'_>,
+) {
+    let (width, height) = size;
+    let mut field = input_rect(content.width, content.height, scale);
+    field.x += content.x;
+    let mut image = Image {
+        canvas,
+        width,
+        height,
+        clip: content,
     };
-    // Clear old hints/caret/text without touching the cached quote pixels.
-    image.rect(input_damage(width as f32, height as f32, scale), BACKGROUND);
+    // Clear only the content strip, never the adjacent focus sidebar.
+    let mut damage = input_damage(content.width, content.height, scale);
+    damage.x += content.x;
+    image.rect(damage, BACKGROUND);
     let full_clip = image.clip;
     if !view.suggestions.is_empty() && view.saved_text.is_none() {
         render_suggestions(
@@ -709,7 +768,7 @@ pub fn render_input(
     let hint_size = 12.0 * scale;
     // Bound error/hint text to the output too; no submitted activity is echoed here.
     let mut hint_end = hint.len();
-    while hint_end > 0 && text_width(font, &hint[..hint_end], hint_size) > width as f32 * 0.9 {
+    while hint_end > 0 && text_width(font, &hint[..hint_end], hint_size) > content.width * 0.9 {
         hint_end = hint[..hint_end]
             .char_indices()
             .next_back()

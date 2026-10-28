@@ -29,7 +29,7 @@ Uninstalling also leaves `~/.naal-focus/` activity history untouched. Both scrip
 
 ## Settings and controls
 
-Click the panel/dock icon for a compact popup with status, the recurring-reminders toggle, **Show now**, **Snooze 15 min** (or **Resume** while snoozed), **Dashboard…**, and **Settings…**. Detailed preferences and quote editing live only in the dedicated settings window, grouped into **Timing**, **Appearance**, **Overlay charts**, and **Reflection**. The window stays open when clicking elsewhere. Reopening settings activates the existing window rather than creating another; `naal-focus --settings` uses the same entry point.
+Click the panel/dock icon for a compact popup with status, the recurring-reminders toggle, **Show now**, **Snooze 15 min** (or **Resume** while snoozed), **Dashboard…**, and **Settings…**. Detailed preferences and quote editing live only in the dedicated settings window, grouped into **Timing**, **Appearance**, **Overlay charts**, **Focus history**, and **Reflection**. The window stays open when clicking elsewhere. Reopening settings activates the existing window rather than creating another; `naal-focus --settings` uses the same entry point.
 
 Settings live at `$XDG_CONFIG_HOME/naal-focus/settings.json`, falling back to `~/.config/naal-focus/settings.json`. Saves are atomic. Invalid, oversized, or unsupported-version files remain untouched until explicit **Save settings** replaces them.
 
@@ -43,6 +43,9 @@ Settings live at `$XDG_CONFIG_HOME/naal-focus/settings.json`, falling back to `~
 | Idle threshold | 120 seconds | 30–3600 |
 | Chart style | Heatmap (hidden until a category is enabled) | Heatmap / Treemap; shared across categories |
 | Chart categories | All off | Independent Projects / Feelings / Tags switches |
+| Track window time | Off | Independent of reminders and snooze |
+| Focus graph | Timeline + totals | Time spent / Day timeline / Timeline + totals |
+| Focus sidebar | Right | Left / Right |
 | Quotes | Four reminders | 1–100; ≤500 characters each, including line breaks |
 
 - **Save settings** applies edited fields together, cancels pending/visible reminders, and restarts the interval. The settings window follows shared saved values without overwriting unsaved edits. A failed save retains its draft.
@@ -76,7 +79,7 @@ Values use Unicode letters, numbers, and combining marks, plus `_` and `-`; trai
 
 While the caret is inside a mention, up to five matching saved values appear alphabetically, including values from earlier days and legacy logs. An exact normalized match needs no suggestion. **↑ / ↓** selects a suggestion, **Tab** replaces the active mention (including its suffix after the caret), and **Enter** always saves the reflection as written. Completing at the end adds a space. Suggestions temporarily replace the recall dial; **Esc** closes them without discarding text, after which arrows browse history and a further Esc follows the usual cancellation rules. New values need no separate creation step: save a reflection to add them to the vocabulary. No built-in feeling list or inferred metadata is used. Suggestion selection does not pause or extend time; accepting one is a normal edit under the same fixed typing allowance. All outputs share one suggestion selection and editor.
 
-History lives at `$HOME/.naal-focus/activity.jsonl`, independent of XDG configuration and install prefix. `HOME` must be absolute. The directory is private (0700) and the file is private (0600), owned by the current user; symlink/hardlink targets are refused. No cloud, accounts, application monitoring, raw key history, or writing-duration measurement is involved.
+History lives at `$HOME/.naal-focus/activity.jsonl`, independent of XDG configuration and install prefix. `HOME` must be absolute. The directory is private (0700) and the file is private (0600), owned by the current user; symlink/hardlink targets are refused. Reflection history involves no cloud, accounts, raw key history, or writing-duration measurement. The separate opt-in focus tracker below records foreground-window time, never reflection-writing duration.
 
 Each JSON line is a versioned record with an opaque identity, UTC Unix timestamp in milliseconds, submitted text, and explicit metadata:
 
@@ -97,6 +100,20 @@ In **Settings… → Overlay charts**, choose one shared **Heatmap** or **Treema
 - Enabled categories sit side by side in a reserved band above history/input, using one data snapshot across monitors. On unusually small desktop outputs, charts are omitted rather than overlapping quote/input; settings are retained. Three enabled categories fit at 800×600 logical pixels. Native keyboard, timeout, and background-click behavior are unchanged.
 
 The optional version-1 settings field is `"charts": {"style": "heatmap", "projects": false, "feelings": false, "tags": false}`; the other supported style is `"treemap"`. Manual helper tests can use `--chart-style heatmap --charts projects,feelings,tags` (or `treemap` / `none`); **launching the helper captures focus**, so use the consented procedure in the testing guide.
+
+## Focus history
+
+**Settings… → Focus history → Track window time** opts in to collecting foreground application IDs and window titles through COSMIC's native window-info protocols. It is off for new and existing settings. **Graph** offers **Time spent**, **Day timeline**, and **Timeline + totals** (default); **Sidebar** offers **Left** and **Right** (default). These preferences use the same shared settings draft/save path as other fields.
+
+- Tracking is independent of recurring reminders and snooze. Closing every applet/settings instance stops it; no separately installed service runs. Disabling tracking stops collection but keeps today's already collected records until normal day cleanup.
+- One shared supervisor records the active window once across all monitors. Foreground-window time is not proof of attention. Same application ID/title pairs are combined in totals; browser tabs are distinguishable only by the title exposed by the browser. Private/incognito windows are not automatically excluded, and titles may reveal documents or conversations. No screenshots, page content, URLs beyond what appears in a title, raw keys, or input events are recorded.
+- Existing guards suppress collection on lock, idle, inactive sessions, sleep, missing/stale guard observations, and supervised reminders. The existing idle threshold applies: time before the session is declared idle is not retroactively removed. Unknown/ambiguous active windows, Naal Focus's own windows, clock jumps, and gaps over three seconds are not credited. Time is accumulated using the monotonic boot clock; observations are normally within about 100 ms of a transition. Nothing before opt-in or during a closed app can be reconstructed.
+- **Time spent** ranks windows by accumulated duration. At most six rows are shown (five alongside the combined timeline), with overflow summed into **Other**. **Day timeline** places recorded sessions on a vertical local-time axis, from the first recorded hour to the snapshot time. Gaps mean untracked time, not an inferred reason for being away. Short sessions remain colored but may omit labels. Colors stay consistent per application.
+- Each reminder receives one in-memory snapshot shared across its outputs; its time labels and durations do not advance while the reminder is open. Midnight clears the old day. The sidebar is omitted below 960×600 logical pixels to protect quote/input, but collection continues. Existing mention charts remain in their separate band inside the remaining content area; keyboard and click behavior are unchanged.
+- The only durable window-history file is `$HOME/.naal-focus/focus.json` (0600 in a 0700 directory). Writes are atomic, owner-checked, and refuse symlinks, hardlinks, and nonregular targets. Crash scratch files are cleaned on startup. Snapshots save every 15 seconds and on collection pauses; abrupt termination can lose recent unsaved time. Restarts reload today without bridging the unobserved gap. Old-day records are removed while running, even if tracking is off, or at next startup after the app has been closed. Cleanup/storage errors are reported, not treated as an empty day.
+- Titles are bounded to 256 Unicode characters and application IDs to 128; control characters are removed. A day is bounded to 20,000 sessions / 32 MiB; reaching the limit pauses recording with an explicit error instead of silently dropping history. Ordinary daily usage is far smaller; rapidly changing titles can generate more sessions. This file is separate from reflections and is not included in the activity dashboard.
+
+The optional version-1 setting is `"focus": {"enabled": false, "style": "both", "side": "right"}`. Other styles are `"totals"` and `"timeline"`; the other side is `"left"`. The helper accepts these display preferences but never starts its own tracker. Its supervisor supplies a bounded private JSON payload on stdin; titles are not placed in arguments, D-Bus status, or console logs. Legacy raw-quote `--stdin` is still supported. Use the supervised **Show now** path for consented live acceptance, not a bare helper expecting to collect history.
 
 ## Activity dashboard
 
@@ -167,7 +184,8 @@ This is not a screen lock. Compositor shortcuts can still work; focus restoratio
 | Files | Responsibility |
 |---|---|
 | `src/applet.rs`, `src/applet/` | Quick popup, grouped settings draft, desktop launch and single-window activation |
-| `src/config.rs` | Settings, chart preferences, quote parsing/formatting, persistence |
+| `src/config.rs` | Settings, chart/focus preferences, quote parsing/formatting, persistence |
+| `src/focus.rs`, `src/focus/`, `src/render/focus.rs` | Foreground-time accounting, today-only storage, COSMIC observer, native focus sidebar |
 | `src/charts.rs`, `src/render/charts.rs` | Local-day/hour mention aggregation, correction reconciliation, native heatmap/treemap layout |
 | `src/activity.rs`, `src/activity_log.rs`, `src/recall.rs`, `src/metadata.rs` | Reflection editing/countdowns, private history and atomic corrections, today's grouped recall dial, shared metadata parsing and completion |
 | `src/dashboard.rs`, `src/dashboard_page.html` | Pure activity-dashboard generation, private writer, detached browser open |

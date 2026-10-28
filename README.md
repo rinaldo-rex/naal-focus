@@ -43,6 +43,14 @@ Under **Settings… → Overlay charts**, choose **Heatmap** (hourly mentions) o
 
 Charts show today's saved mentions, not time spent. Successful saves and corrections update them across monitors; drafts do not. Up to four values are shown per category, grouping overflow as **Other**. Charts sit above the history/input area without changing keyboard controls.
 
+## Focus history
+
+Under **Settings… → Focus history**, enable **Track window time**. Tracking starts **off**, including on upgrades. Choose **Time spent**, **Day timeline**, or **Timeline + totals** (default), and a **Left** or **Right** sidebar (default Right).
+
+This records foreground applications and window titles while the applet runs—not screenshots, keystrokes, or proof of attention. Tracking keeps running when reminders are paused or snoozed; its own switch stops collection. Idle, lock, sleep, missing observations, Naal Focus windows, and supervised reminder time are excluded.
+
+Only today's history is kept privately in `~/.naal-focus/focus.json`. Older titles are cleared at day rollover while running, or on the next startup if the app was closed. Browser/document titles can be sensitive, including private-window titles. No data leaves the device. See the [focus-history reference](docs/REFERENCE.md#focus-history) for timing, storage limits, and display behavior.
+
 ## Quotes
 
 Start each quote with an unindented `- `. Following lines belong to that quote:

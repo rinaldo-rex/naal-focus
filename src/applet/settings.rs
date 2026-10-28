@@ -1,5 +1,5 @@
 //! Settings drafts stay local until an explicit, successful shared save.
-use crate::config::{self, ChartSettings, Settings};
+use crate::config::{self, ChartSettings, FocusSettings, Settings};
 use cosmic::widget;
 
 /// Live per-field message for one numeric settings input, matching the
@@ -19,6 +19,7 @@ pub(super) struct SettingsForm {
     pub text_size: String,
     pub idle_secs: String,
     pub charts: ChartSettings,
+    pub focus: FocusSettings,
     pub quotes: widget::text_editor::Content<cosmic::Renderer>,
     pub error: Option<String>,
     pub dirty: bool,
@@ -34,6 +35,7 @@ impl SettingsForm {
             text_size: settings.text_size.to_string(),
             idle_secs: settings.idle_secs.to_string(),
             charts: settings.charts.clone(),
+            focus: settings.focus.clone(),
             quotes: widget::text_editor::Content::with_text(&config::format_quotes(
                 &settings.quotes,
             )),
@@ -98,6 +100,7 @@ impl SettingsForm {
                 .parse()
                 .map_err(|_| "Idle threshold needs an integer.")?,
             charts: self.charts.clone(),
+            focus: self.focus.clone(),
             quotes: config::parse_quotes(&self.quotes.text())?,
             // Enabling reminders is a quick action, not part of this draft.
             ..settings.clone()
@@ -219,6 +222,26 @@ mod tests {
         let mut clean = SettingsForm::new(&original);
         clean.sync(&saved, None);
         assert_eq!(clean.charts, saved.charts);
+    }
+
+    #[test]
+    fn focus_preferences_keep_dirty_drafts_and_post_save_edits() {
+        let original = Settings::default();
+        let mut form = SettingsForm::new(&original);
+        form.focus.enabled = true;
+        form.focus.style = config::FocusStyle::Timeline;
+        form.focus.side = config::FocusSide::Left;
+        form.dirty = true;
+        form.sync(&original, None);
+        let saved = form.save(&original).unwrap();
+        assert_eq!(saved.focus, form.focus);
+        form.focus.style = config::FocusStyle::Totals;
+        assert!(form.sync(&saved, None));
+        assert!(form.dirty);
+        assert_eq!(form.focus.style, config::FocusStyle::Totals);
+        let mut clean = SettingsForm::new(&original);
+        clean.sync(&saved, None);
+        assert_eq!(clean.focus, saved.focus);
     }
 
     #[test]

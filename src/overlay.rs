@@ -2,8 +2,8 @@
 use crate::{
     activity::{Activity, Expiry},
     activity_log::{Entry, PendingSave},
-    config::{ChartSettings, ChartStyle, Settings, validate_quotes},
-    dashboard,
+    config::{ChartSettings, ChartStyle, FocusSide, FocusStyle, Settings, validate_quotes},
+    dashboard, focus,
     guard::Guard,
     process::{Singleton, boot_time, desktop_connection},
     recall::{self, PendingHistory},
@@ -58,6 +58,10 @@ Usage: naal-focus-overlay [OPTIONS]
   --idle-secs N        Skip idle sessions, 30–3600 (default 120)
   --chart-style STYLE  heatmap (hourly) or treemap (daily totals)
   --charts KINDS       Comma-separated projects,feelings,tags or none (default)
+  --focus-history      Show collected focus history; does not start tracking
+  --focus-style STYLE  totals, timeline, or both (default)
+  --focus-side SIDE    left or right (default)
+  --payload            Read the supervisor's bounded JSON quote/history payload
   --stdin              Read one raw UTF-8 quote (including line breaks) from stdin
   -h, --help           Print help
 
@@ -79,7 +83,16 @@ pub struct Options {
     pub delay: u64,
     pub output: Option<String>,
     pub stdin: bool,
+    pub payload: bool,
 }
+
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Payload {
+    pub quote: String,
+    pub focus: Option<focus::Snapshot>,
+}
+
 impl Options {
     pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Option<Self>, String> {
         let mut options = Self::default();
@@ -92,6 +105,23 @@ impl Options {
                 "--once" => {}
                 "--all" => all = true,
                 "--stdin" => options.stdin = true,
+                "--payload" => options.payload = true,
+                "--focus-history" => options.settings.focus.enabled = true,
+                "--focus-style" => {
+                    options.settings.focus.style = match args.next().as_deref() {
+                        Some("totals") => FocusStyle::Totals,
+                        Some("timeline") => FocusStyle::Timeline,
+                        Some("both") => FocusStyle::Both,
+                        _ => return Err("--focus-style requires totals, timeline, or both.".into()),
+                    };
+                }
+                "--focus-side" => {
+                    options.settings.focus.side = match args.next().as_deref() {
+                        Some("left") => FocusSide::Left,
+                        Some("right") => FocusSide::Right,
+                        _ => return Err("--focus-side requires left or right.".into()),
+                    };
+                }
                 "--output" => {
                     options.output = Some(
                         args.next()
@@ -147,6 +177,9 @@ impl Options {
             }
         }
         options.settings.validate()?;
+        if options.stdin && options.payload {
+            return Err("Choose --stdin or --payload, not both.".into());
+        }
         if options.delay > 60 {
             return Err("Delay must be 0–60 seconds.".into());
         }
@@ -177,7 +210,34 @@ fn read_stdin_quote(input: impl Read) -> Result<String, String> {
     Ok(quote)
 }
 
+fn read_payload(input: impl Read) -> Result<Payload, String> {
+    let limit = focus::MAX_BYTES + 8192;
+    let mut bytes = Vec::new();
+    input
+        .take(limit + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| e.to_string())?;
+    if bytes.len() as u64 > limit {
+        return Err("Overlay payload is too large.".into());
+    }
+    let mut payload: Payload =
+        serde_json::from_slice(&bytes).map_err(|_| "Invalid overlay payload.")?;
+    validate_quotes(std::slice::from_ref(&payload.quote))?;
+    if let Some(snapshot) = &mut payload.focus {
+        snapshot.day.validate(recall::system_ms())?;
+        snapshot.day.advance_day(recall::system_ms());
+    }
+    Ok(payload)
+}
+
 pub fn run(mut options: Options) -> Result<(), Box<dyn Error>> {
+    let focus_snapshot = if options.payload && !options.check {
+        let payload = read_payload(std::io::stdin())?;
+        options.settings.quotes = vec![payload.quote];
+        payload.focus
+    } else {
+        None
+    };
     if options.stdin && !options.check {
         options.settings.quotes = vec![read_stdin_quote(std::io::stdin())?];
     }
@@ -207,6 +267,8 @@ pub fn run(mut options: Options) -> Result<(), Box<dyn Error>> {
         text_size: options.settings.text_size,
         charts: options.settings.charts.clone(),
         chart_revision: 1,
+        focus_settings: options.settings.focus.clone(),
+        focus_snapshot,
         requested_at: None,
         mapped_at: None,
         activity: Activity::new(
@@ -254,6 +316,21 @@ pub fn run(mut options: Options) -> Result<(), Box<dyn Error>> {
                     .unwrap_or("ready (active, unlocked, not idle)")
             );
             if options.check {
+                let protocols = globals.contents().clone_list();
+                let focus_available = protocols
+                    .iter()
+                    .any(|g| g.interface == "zcosmic_toplevel_info_v1" && g.version >= 2)
+                    && protocols
+                        .iter()
+                        .any(|g| g.interface == "ext_foreign_toplevel_list_v1");
+                println!(
+                    "Focus history protocols: {} (no window metadata requested).",
+                    if focus_available {
+                        "available"
+                    } else {
+                        "unavailable"
+                    }
+                );
                 println!(
                     "Desktop layer-shell and shared-memory rendering available; no surfaces created."
                 );
@@ -373,6 +450,8 @@ struct App {
     text_size: u32,
     charts: ChartSettings,
     chart_revision: u64,
+    focus_settings: crate::config::FocusSettings,
+    focus_snapshot: Option<focus::Snapshot>,
     requested_at: Option<Duration>,
     mapped_at: Option<Duration>,
     activity: Activity,
@@ -560,6 +639,14 @@ impl App {
         self.dirty = true;
     }
     fn repaint(&mut self, now: Duration) -> Result<(), Box<dyn Error>> {
+        if self
+            .focus_snapshot
+            .as_mut()
+            .is_some_and(|snapshot| snapshot.day.advance_day(recall::system_ms()))
+        {
+            self.chart_revision += 1;
+            self.dirty = true;
+        }
         if self.charts.kinds().next().is_some()
             && self
                 .activity
@@ -679,25 +766,35 @@ impl App {
             return Ok(());
         };
         let charts_changed = self.active[index].chart_versions[buffer_index] != self.chart_revision;
+        let content = render::focus_content(
+            width as f32,
+            height as f32,
+            scale as f32,
+            &self.focus_settings,
+        );
         let buffer = &self.active[index].buffers[buffer_index];
         let canvas = self.pool.canvas(buffer).ok_or("Buffer is still in use")?;
         if fresh {
-            render::render_with_charts(
+            render::render_overlay(
                 canvas,
                 (width as usize, height as usize),
                 self.font.as_ref().ok_or("Font not loaded")?,
-                &self.quote,
-                self.text_size as f32 * scale as f32,
                 scale as f32,
-                &self.charts,
+                render::OverlayView {
+                    quote: &self.quote,
+                    text_size: self.text_size as f32 * scale as f32,
+                    charts: &self.charts,
+                    focus: &self.focus_settings,
+                },
             );
         }
         if charts_changed {
-            render::render_charts(
+            render::render_charts_in(
                 canvas,
                 (width as usize, height as usize),
                 self.font.as_ref().ok_or("Font not loaded")?,
                 scale as f32,
+                content,
                 render::ChartView {
                     settings: &self.charts,
                     data: self
@@ -707,17 +804,25 @@ impl App {
                     unavailable: self.history_unavailable,
                 },
             );
+            render::render_focus(
+                canvas,
+                (width as usize, height as usize),
+                self.font.as_ref().ok_or("Font not loaded")?,
+                scale as f32,
+                &self.focus_settings,
+                self.focus_snapshot.as_ref(),
+            );
         }
         let saving = self
             .save
             .as_ref()
             .is_some_and(|job| job.generation == self.activity.generation());
-        render::render_input(
+        render::render_input_in(
             canvas,
-            width as usize,
-            height as usize,
+            (width as usize, height as usize),
             self.font.as_ref().ok_or("Font not loaded")?,
             scale as f32,
+            content,
             render::InputView {
                 editor: &self.activity.editor,
                 suggestions: &self.activity.suggestions(),
@@ -756,16 +861,15 @@ impl App {
         if fresh {
             surface.damage_buffer(0, 0, width as i32, height as i32);
         } else {
-            let damage = render::input_damage(width as f32, height as f32, scale as f32);
+            let damage = render::input_damage(content.width, content.height, scale as f32);
             surface.damage_buffer(
-                0,
+                content.x.floor() as i32,
                 damage.y.floor() as i32,
-                width as i32,
+                content.width.ceil() as i32,
                 damage.height.ceil() as i32,
             );
             if charts_changed
-                && let Some(band) =
-                    render::chart_damage(width as f32, height as f32, scale as f32, &self.charts)
+                && let Some(band) = render::chart_damage_in(content, scale as f32, &self.charts)
             {
                 surface.damage_buffer(
                     band.x.floor() as i32,
@@ -774,6 +878,22 @@ impl App {
                     band.height.ceil() as i32 + 1,
                 );
             }
+        }
+        if charts_changed
+            && !fresh
+            && let Some(sidebar) = render::focus_sidebar(
+                width as f32,
+                height as f32,
+                scale as f32,
+                &self.focus_settings,
+            )
+        {
+            surface.damage_buffer(
+                sidebar.x.floor() as i32,
+                sidebar.y.floor() as i32,
+                sidebar.width.ceil() as i32,
+                sidebar.height.ceil() as i32,
+            );
         }
         buffer.attach_to(surface)?;
         active.layer.commit();
@@ -1045,13 +1165,23 @@ impl PointerHandler for App {
             else {
                 continue;
             };
+            let scale = active.scale.clamp(1, 4) as f32;
+            let content = render::focus_content(
+                active.size.0 as f32 * scale,
+                active.size.1 as f32 * scale,
+                scale,
+                &self.focus_settings,
+            );
             self.dirty |= pointer_input(
                 &mut self.activity,
                 self.font.as_ref(),
                 &event.kind,
-                active.size,
-                active.scale.clamp(1, 4) as f32,
-                event.position,
+                ((content.width / scale).round() as u32, active.size.1),
+                scale,
+                (
+                    event.position.0 - f64::from(content.x / scale),
+                    event.position.1,
+                ),
                 boot_time(),
             );
         }
@@ -1264,6 +1394,106 @@ mod tests {
             assert!(read_stdin_quote(bad.as_bytes()).is_err());
         }
         assert!(read_stdin_quote(&[0xff][..]).is_err());
+    }
+
+    #[test]
+    fn sidebars_preserve_scaled_field_hit_testing_and_background_clicks() {
+        let font = Font::from_bytes(
+            std::fs::read("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf").unwrap(),
+            fontdue::FontSettings::default(),
+        )
+        .unwrap();
+        for side in [FocusSide::Left, FocusSide::Right] {
+            for scale in [1.0, 2.0] {
+                let settings = crate::config::FocusSettings {
+                    enabled: true,
+                    side,
+                    ..Default::default()
+                };
+                let content =
+                    render::focus_content(1920.0 * scale, 1080.0 * scale, scale, &settings);
+                let field = render::input_rect(content.width, content.height, scale);
+                let virtual_size = ((content.width / scale) as u32, 1080);
+                let mut activity = Activity::new(Duration::from_secs(10), Duration::from_secs(30));
+                activity.mapped(Duration::ZERO);
+                activity.insert("Saved reflection", Duration::from_secs(1));
+                let (generation, text) = activity.submission().unwrap();
+                activity.saved(generation, &text, Duration::from_secs(2));
+                // Same coordinate transform used by the live pointer handler.
+                let global = (
+                    (content.x + field.x + 15.0 * scale) / scale,
+                    (field.y + 10.0 * scale) / scale,
+                );
+                let local = (f64::from(global.0 - content.x / scale), f64::from(global.1));
+                assert!(pointer_input(
+                    &mut activity,
+                    Some(&font),
+                    &press(),
+                    virtual_size,
+                    scale,
+                    local,
+                    Duration::from_secs(3)
+                ));
+                assert_eq!(activity.editor.cursor(), 0);
+                let sidebar =
+                    render::focus_sidebar(1920.0 * scale, 1080.0 * scale, scale, &settings)
+                        .unwrap();
+                let background = (
+                    f64::from((sidebar.x - content.x + 10.0 * scale) / scale),
+                    f64::from((sidebar.y + 10.0 * scale) / scale),
+                );
+                assert!(!pointer_input(
+                    &mut activity,
+                    Some(&font),
+                    &press(),
+                    virtual_size,
+                    scale,
+                    background,
+                    Duration::from_secs(3)
+                ));
+            }
+        }
+    }
+
+    #[test]
+    fn focus_cli_and_private_payload_are_validated_before_capturing_focus() {
+        for args in [
+            vec!["--focus-style"],
+            vec!["--focus-style", "pie"],
+            vec!["--focus-side", "top"],
+            vec!["--stdin", "--payload"],
+        ] {
+            assert!(parse(&args).is_err());
+        }
+        let selected = parse(&[
+            "--focus-history",
+            "--focus-style",
+            "timeline",
+            "--focus-side",
+            "left",
+        ])
+        .unwrap()
+        .unwrap();
+        assert!(selected.settings.focus.enabled);
+        assert_eq!(selected.settings.focus.style, FocusStyle::Timeline);
+        assert_eq!(selected.settings.focus.side, FocusSide::Left);
+        let payload = Payload {
+            quote: "Take a breath.\nReturn.".into(),
+            focus: Some(focus::Snapshot {
+                day: focus::Day::empty(recall::system_ms()),
+                unavailable: false,
+            }),
+        };
+        let bytes = serde_json::to_vec(&payload).unwrap();
+        assert_eq!(read_payload(bytes.as_slice()).unwrap().quote, payload.quote);
+        for invalid in [
+            b"{}".as_slice(),
+            b"not json",
+            br#"{"quote":"", "focus":null}"#,
+            br#"{"quote":"ok", "focus":null,"extra":1}"#,
+        ] {
+            assert!(read_payload(invalid).is_err());
+        }
     }
 
     #[test]
