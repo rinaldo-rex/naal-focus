@@ -107,6 +107,7 @@ pub struct Settings {
     pub idle_secs: u32,
     pub charts: ChartSettings,
     pub focus: FocusSettings,
+    pub breathing: crate::breathing::Settings,
     pub quotes: Vec<String>,
 }
 
@@ -123,6 +124,7 @@ impl Default for Settings {
             idle_secs: 120,
             charts: ChartSettings::default(),
             focus: FocusSettings::default(),
+            breathing: crate::breathing::Settings::default(),
             quotes: parse_quotes(DEFAULT_QUOTES).expect("valid bundled quotes"),
         }
     }
@@ -133,6 +135,7 @@ impl Settings {
     /// Eight seconds cover guard/configuration startup and cleanup.
     pub fn helper_lifetime_secs(&self) -> u64 {
         self.duration_secs
+            .saturating_add(self.breathing.duration().as_secs())
             .saturating_add(self.typing_limit_secs)
             .saturating_add(8)
     }
@@ -159,6 +162,7 @@ impl Settings {
         if !(30..=3600).contains(&self.idle_secs) {
             return Err("Idle threshold must be 30–3600 seconds.".into());
         }
+        self.breathing.validate()?;
         validate_quotes(&self.quotes)
     }
 }
@@ -498,6 +502,7 @@ mod tests {
     fn typing_limit_is_bounded_and_old_settings_get_the_default() {
         let old: Settings = serde_json::from_str(r#"{"version":1,"duration_secs":5}"#).unwrap();
         assert_eq!(old.typing_limit_secs, 120);
+        assert_eq!(old.breathing, crate::breathing::Settings::default());
         old.validate().unwrap();
         for limit in [0, 29, 601, u64::MAX] {
             assert!(
@@ -515,7 +520,7 @@ mod tests {
                 ..Settings::default()
             };
             settings.validate().unwrap();
-            assert_eq!(settings.helper_lifetime_secs(), 5 + limit + 8);
+            assert_eq!(settings.helper_lifetime_secs(), 14 + 5 + limit + 8);
             assert_eq!(
                 serde_json::from_str::<Settings>(&serde_json::to_string(&settings).unwrap())
                     .unwrap(),

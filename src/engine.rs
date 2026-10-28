@@ -556,7 +556,7 @@ mod tests {
         assert_eq!(helper.settings.typing_limit_secs, 600);
         assert_eq!(helper.settings.text_size, 48);
         assert_eq!(helper.settings.idle_secs, 900);
-        assert_eq!(settings.helper_lifetime_secs(), 638);
+        assert_eq!(settings.helper_lifetime_secs(), 652);
         assert_eq!(
             helper.settings.helper_lifetime_secs(),
             settings.helper_lifetime_secs()
