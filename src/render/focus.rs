@@ -2,8 +2,8 @@
 use super::{BACKGROUND, Image, Rect, shortened, text_width};
 use crate::{
     config::{FocusSettings, FocusSide, FocusStyle},
-    dashboard::to_local,
     focus::{Day, Snapshot, Total, Window, duration_label},
+    time::to_local,
 };
 use fontdue::Font;
 

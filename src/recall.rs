@@ -3,12 +3,12 @@
 use crate::{
     activity_log::{self, Entry},
     charts::DailyCharts,
-    dashboard::{self, Local},
     metadata::Vocabulary,
+    time::{Local, system_ms, to_local},
 };
 use std::{
     sync::mpsc::{self, Receiver, TryRecvError},
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::Duration,
 };
 
 pub const ROW_OPACITY: [u8; 3] = [20, 40, 70];
@@ -40,10 +40,6 @@ impl Group {
     }
 }
 
-fn same_day(a: Local, b: Local) -> bool {
-    (a.year, a.month, a.day) == (b.year, b.month, b.day)
-}
-
 pub fn today_groups(
     mut entries: Vec<Entry>,
     now_ms: u64,
@@ -51,7 +47,8 @@ pub fn today_groups(
 ) -> Vec<Group> {
     let today = to_local(now_ms);
     entries.retain(|entry| {
-        entry.timestamp_unix_ms <= now_ms && same_day(to_local(entry.timestamp_unix_ms), today)
+        entry.timestamp_unix_ms <= now_ms
+            && to_local(entry.timestamp_unix_ms).date() == today.date()
     });
     // Stable sort retains file order for moments with the same timestamp.
     entries.sort_by_key(|entry| entry.timestamp_unix_ms);
@@ -132,14 +129,6 @@ impl Recall {
     }
 }
 
-pub(crate) fn system_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis()
-        .min(u64::MAX as u128) as u64
-}
-
 fn load_history(
     directory: &std::path::Path,
     now_ms: u64,
@@ -151,7 +140,8 @@ fn load_history(
         if entry.timestamp_unix_ms <= now_ms {
             vocabulary.include(entry.metadata());
         }
-        entry.timestamp_unix_ms <= now_ms && same_day(to_local(entry.timestamp_unix_ms), today)
+        entry.timestamp_unix_ms <= now_ms
+            && to_local(entry.timestamp_unix_ms).date() == today.date()
     })?;
     Ok(Recall {
         charts: DailyCharts::from_entries(&entries, now_ms, to_local),
@@ -168,9 +158,7 @@ pub struct PendingHistory {
 impl PendingHistory {
     pub fn start() -> Result<Self, String> {
         let now_ms = system_ms();
-        Self::start_with(move || {
-            load_history(&activity_log::directory()?, now_ms, dashboard::to_local)
-        })
+        Self::start_with(move || load_history(&activity_log::directory()?, now_ms, to_local))
     }
     fn start_with(
         read: impl FnOnce() -> Result<Recall, String> + Send + 'static,

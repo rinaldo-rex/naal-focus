@@ -1,15 +1,12 @@
 //! Current-local-day mention counts. No inferred durations or draft metadata.
 use crate::{
     activity_log::Entry,
-    dashboard::Local,
     metadata::{Kind, Metadata},
+    time::Local,
 };
 use std::collections::{BTreeMap, HashMap};
 
 type Day = (i32, u32, u32);
-fn day(local: Local) -> Day {
-    (local.year, local.month, local.day)
-}
 fn index(kind: Kind) -> usize {
     match kind {
         Kind::Project => 0,
@@ -63,10 +60,10 @@ impl DailyCharts {
 
     /// Hour/day rollover never carries yesterday's counts into a new day.
     pub fn advance(&mut self, now: Local) -> bool {
-        let changed = self.date != Some(day(now)) || self.hour != now.hour;
-        if self.date != Some(day(now)) {
+        let changed = self.date != Some(now.date()) || self.hour != now.hour;
+        if self.date != Some(now.date()) {
             *self = Self {
-                date: Some(day(now)),
+                date: Some(now.date()),
                 ..Self::default()
             };
         }
@@ -80,7 +77,7 @@ impl DailyCharts {
             return;
         }
         let local = to_local(entry.timestamp_unix_ms);
-        if self.date != Some(day(local)) {
+        if self.date != Some(local.date()) {
             return;
         }
         if !entry.id.is_empty()

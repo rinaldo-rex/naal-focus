@@ -2,7 +2,10 @@
 //! entries plus a private writer and a detached browser launch. All
 //! statistics derive only from documented history fields (text, timestamp);
 //! untrusted text is embedded as escaped JSON, never as HTML or script.
-use crate::activity_log::{self, Entry};
+use crate::{
+    activity_log::{self, Entry},
+    time::{Local, to_local, unix_millis},
+};
 use serde::Serialize;
 use std::{
     collections::{BTreeMap, BTreeSet, HashSet},
@@ -12,7 +15,6 @@ use std::{
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::mpsc::{self, Receiver, TryRecvError},
-    time::{SystemTime, UNIX_EPOCH},
 };
 
 const TEMPLATE: &str = include_str!("dashboard_page.html");
@@ -33,51 +35,6 @@ const MONTHS: [&str; 12] = [
     "November",
     "December",
 ];
-
-/// Local calendar date and time, used for day bucketing and display.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Local {
-    pub year: i32,
-    pub month: u32,
-    pub day: u32,
-    pub hour: u32,
-    pub minute: u32,
-    pub second: u32,
-}
-
-/// Time-zone conversion through the C library, honoring the session zone.
-pub fn to_local(unix_ms: u64) -> Local {
-    let secs = (unix_ms / 1000).min(i64::MAX as u64) as libc::time_t;
-    // SAFETY: tm is a live writable struct; localtime_r only writes through
-    // the given pointer and is thread-safe, as is the gmtime_r fallback.
-    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
-    if unsafe { libc::localtime_r(&secs, &mut tm) }.is_null() {
-        // SAFETY: g is a live writable struct; gmtime_r writes only to it.
-        let mut g: libc::tm = unsafe { std::mem::zeroed() };
-        if unsafe { libc::gmtime_r(&secs, &mut g) }.is_null() {
-            return Local {
-                year: 1970,
-                month: 1,
-                day: 1,
-                hour: 0,
-                minute: 0,
-                second: 0,
-            };
-        }
-        return from_tm(g);
-    }
-    from_tm(tm)
-}
-fn from_tm(tm: libc::tm) -> Local {
-    Local {
-        year: tm.tm_year.saturating_add(1900),
-        month: tm.tm_mon.max(0) as u32 + 1,
-        day: tm.tm_mday.max(1) as u32,
-        hour: tm.tm_hour.max(0) as u32,
-        minute: tm.tm_min.max(0) as u32,
-        second: tm.tm_sec.max(0) as u32,
-    }
-}
 
 /// Days since 1970-01-01 from a civil date (Howard Hinnant's public-domain
 /// algorithms). Pure date arithmetic: no time zones, no wall clock.
@@ -101,9 +58,6 @@ fn civil_from_days(z: i64) -> (i32, u32, u32) {
     let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
     let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
     (if m <= 2 { y + 1 } else { y } as i32, m, d)
-}
-fn date_key(l: &Local) -> String {
-    format!("{:04}-{:02}-{:02}", l.year, l.month, l.day)
 }
 fn key_days(key: &str) -> i64 {
     let mut parts = key.split('-');
@@ -202,7 +156,7 @@ pub fn generate(
 ) -> String {
     let now = to_local(now_ms);
     let today_days = days_from_civil(now.year, now.month, now.day);
-    let today_key = date_key(&now);
+    let today_key = now.date_key();
 
     let mut outs: Vec<EntryOut> = entries
         .iter()
@@ -211,7 +165,7 @@ pub fn generate(
             let metadata = e.metadata();
             EntryOut {
                 ms: e.timestamp_unix_ms,
-                date: date_key(&l),
+                date: l.date_key(),
                 minutes: l.hour * 60 + l.minute,
                 text: e.text.clone(),
                 tags: metadata.tags,
@@ -358,7 +312,7 @@ pub fn generate_error(reason: &str, now_ms: u64, to_local: impl Fn(u64) -> Local
         v: 1,
         generated_ms: now_ms,
         generated_local: GeneratedLocal {
-            date: date_key(&now),
+            date: now.date_key(),
             date_long: format!(
                 "{} {}, {}",
                 MONTHS[now.month as usize - 1],
@@ -368,7 +322,7 @@ pub fn generate_error(reason: &str, now_ms: u64, to_local: impl Fn(u64) -> Local
             time: clock_12(now.hour, now.minute),
             minutes: now.hour * 60 + now.minute,
         },
-        today: date_key(&now),
+        today: now.date_key(),
         empty: true,
         skipped: 0,
         error: Some(reason.to_owned()),
@@ -391,17 +345,12 @@ pub fn generate_error(reason: &str, now_ms: u64, to_local: impl Fn(u64) -> Local
 
 /// Generation entry points using the real clock and session time zone.
 pub fn generate_system(entries: &[Entry], skipped: usize) -> String {
-    let now_ms = system_ms();
+    let now_ms = unix_millis().unwrap_or_default() as u64;
     generate(entries, skipped, now_ms, to_local)
 }
 pub fn generate_error_system(reason: &str) -> String {
-    generate_error(reason, system_ms(), to_local)
-}
-fn system_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
+    let now_ms = unix_millis().unwrap_or_default() as u64;
+    generate_error(reason, now_ms, to_local)
 }
 
 fn render(payload: &Payload) -> String {

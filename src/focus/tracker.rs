@@ -3,7 +3,7 @@ use super::{Clock, Day, Snapshot, Window, store};
 use crate::{
     activity_log,
     process::{Singleton, boot_time, desktop_connection},
-    recall::system_ms,
+    time::system_ms,
 };
 use cosmic_protocols::toplevel_info::v1::client::{
     zcosmic_toplevel_handle_v1 as handle, zcosmic_toplevel_info_v1 as info,

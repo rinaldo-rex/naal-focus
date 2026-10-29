@@ -323,7 +323,7 @@ fn treemap(image: &mut Image<'_>, font: &Font, body: Rect, rows: &[Series], scal
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{activity_log::Entry, dashboard::Local};
+    use crate::{activity_log::Entry, time::Local};
     fn settings(style: ChartStyle) -> ChartSettings {
         ChartSettings {
             style,

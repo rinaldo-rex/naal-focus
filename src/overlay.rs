@@ -4,11 +4,12 @@ use crate::{
     activity_log::{Entry, PendingSave},
     breathing::Entrance,
     config::{ChartSettings, ChartStyle, FocusSide, FocusStyle, Settings, validate_quotes},
-    dashboard, focus,
+    focus,
     guard::Guard,
     process::{Singleton, boot_time, desktop_connection},
-    recall::{self, PendingHistory},
+    recall::PendingHistory,
     render,
+    time::{system_ms, to_local},
 };
 use fontdue::Font;
 use smithay_client_toolkit::{
@@ -274,8 +275,8 @@ fn read_payload(input: impl Read) -> Result<Payload, String> {
         serde_json::from_slice(&bytes).map_err(|_| "Invalid overlay payload.")?;
     validate_quotes(std::slice::from_ref(&payload.quote))?;
     if let Some(snapshot) = &mut payload.focus {
-        snapshot.day.validate(recall::system_ms())?;
-        snapshot.day.advance_day(recall::system_ms());
+        snapshot.day.validate(system_ms())?;
+        snapshot.day.advance_day(system_ms());
     }
     Ok(payload)
 }
@@ -596,9 +597,7 @@ impl App {
                 // A slow history load must retain vocabulary saved meanwhile.
                 if let Some(entry) = &self.saved_entry {
                     history.vocabulary.include(entry.metadata());
-                    history
-                        .charts
-                        .upsert(entry, recall::system_ms(), dashboard::to_local);
+                    history.charts.upsert(entry, system_ms(), to_local);
                 }
                 self.activity.recall = history;
             }
@@ -623,11 +622,10 @@ impl App {
             Ok(()) => {
                 self.activity.saved(generation, &entry.text, now);
                 self.activity.recall.vocabulary.include(entry.metadata());
-                self.activity.recall.charts.upsert(
-                    &entry,
-                    recall::system_ms(),
-                    dashboard::to_local,
-                );
+                self.activity
+                    .recall
+                    .charts
+                    .upsert(&entry, system_ms(), to_local);
                 self.chart_revision += 1;
                 self.saved_entry = Some(entry);
                 self.retry_entry = None;
@@ -725,17 +723,13 @@ impl App {
         if self
             .focus_snapshot
             .as_mut()
-            .is_some_and(|snapshot| snapshot.day.advance_day(recall::system_ms()))
+            .is_some_and(|snapshot| snapshot.day.advance_day(system_ms()))
         {
             self.chart_revision += 1;
             self.dirty = true;
         }
         if self.charts.kinds().next().is_some()
-            && self
-                .activity
-                .recall
-                .charts
-                .advance(dashboard::to_local(recall::system_ms()))
+            && self.activity.recall.charts.advance(to_local(system_ms()))
         {
             self.chart_revision += 1;
             self.dirty = true;
@@ -986,7 +980,7 @@ impl App {
                         history: Some(render::HistoryView {
                             recall: &self.activity.recall,
                             now,
-                            now_ms: recall::system_ms(),
+                            now_ms: system_ms(),
                         }),
                     },
                 );
@@ -1667,7 +1661,7 @@ mod tests {
         let payload = Payload {
             quote: "Take a breath.\nReturn.".into(),
             focus: Some(focus::Snapshot {
-                day: focus::Day::empty(recall::system_ms()),
+                day: focus::Day::empty(system_ms()),
                 unavailable: false,
             }),
         };

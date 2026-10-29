@@ -1,6 +1,6 @@
 //! One private, atomically replaced daily file; no archive of window titles.
-use super::{Day, MAX_BYTES, day_key};
-use crate::{activity_log, dashboard::to_local};
+use super::{Day, MAX_BYTES};
+use crate::{activity_log, time::to_local};
 use std::{
     ffi::CString,
     fs::{File, OpenOptions, Permissions},
@@ -87,7 +87,7 @@ pub fn load_today_in(directory: &Path, now_ms: u64) -> Result<Day, String> {
         return Err("Focus history is too large.".into());
     }
     let day: Day = serde_json::from_slice(&bytes).map_err(|_| "Focus history is unreadable.")?;
-    if day.date != day_key(to_local(now_ms)) {
+    if day.date != to_local(now_ms).date_key() {
         // SAFETY: live directory descriptor and a static NUL-terminated filename.
         if unsafe { libc::unlinkat(dir.as_raw_fd(), NAME.as_ptr(), 0) } != 0 {
             return Err(std::io::Error::last_os_error().to_string());
@@ -114,7 +114,7 @@ impl Drop for Scratch<'_> {
 
 pub fn save_in(directory: &Path, day: &Day, now_ms: u64) -> Result<(), String> {
     day.validate(now_ms)?;
-    if day.date != day_key(to_local(now_ms)) {
+    if day.date != to_local(now_ms).date_key() {
         return Err("Refusing to retain another day's window history.".into());
     }
     let bytes = serde_json::to_vec(day).map_err(|e| e.to_string())?;

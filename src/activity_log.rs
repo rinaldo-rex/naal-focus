@@ -1,5 +1,5 @@
 //! Private activity history with idempotent appends and atomic corrections.
-use crate::metadata::Metadata;
+use crate::{metadata::Metadata, time::unix_millis};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashSet,
@@ -12,7 +12,6 @@ use std::{
     },
     path::{Path, PathBuf},
     sync::mpsc::{self, Receiver, TryRecvError},
-    time::{SystemTime, UNIX_EPOCH},
 };
 
 pub const MAX_ACTIVITY_CHARS: usize = 2000;
@@ -52,10 +51,7 @@ impl Entry {
     }
     pub fn submitted(text: &str) -> Result<Self, String> {
         validate_text(text)?;
-        let timestamp_unix_ms = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_err(|_| "System clock is before the Unix epoch.")?
-            .as_millis()
+        let timestamp_unix_ms = unix_millis()?
             .try_into()
             .map_err(|_| "System timestamp is out of range.")?;
         Ok(Self {
