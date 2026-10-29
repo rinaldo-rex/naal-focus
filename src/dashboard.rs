@@ -4,6 +4,7 @@
 //! untrusted text is embedded as escaped JSON, never as HTML or script.
 use crate::{
     activity_log::{self, Entry},
+    pending::Pending,
     private_fs,
     time::{Local, to_local, unix_millis},
 };
@@ -15,7 +16,6 @@ use std::{
     os::unix::fs::{MetadataExt, PermissionsExt},
     path::{Path, PathBuf},
     process::{Command, Stdio},
-    sync::mpsc::{self, Receiver, TryRecvError},
 };
 
 const TEMPLATE: &str = include_str!("dashboard_page.html");
@@ -397,36 +397,22 @@ pub fn dashboard_path(directory: &Path) -> PathBuf {
 /// browser. Blocking work stays on this worker; the applet only polls, so a
 /// stalled filesystem cannot freeze its controls.
 pub struct PendingOpen {
-    result: Receiver<Result<(), String>>,
-    done: bool,
+    result: Pending<()>,
 }
 impl PendingOpen {
     pub fn start() -> Result<Self, String> {
-        let (tx, rx) = mpsc::sync_channel(1);
-        std::thread::Builder::new()
-            .name("dashboard-open".into())
-            .spawn(move || {
-                let _ = tx.send(open_and_launch());
-            })
+        Self::start_with(open_and_launch)
+    }
+    fn start_with(
+        open: impl FnOnce() -> Result<(), String> + Send + 'static,
+    ) -> Result<Self, String> {
+        let result = Pending::start("dashboard-open", open)
             .map_err(|_| "Cannot start the dashboard worker; try again.".to_string())?;
-        Ok(Self {
-            result: rx,
-            done: false,
-        })
+        Ok(Self { result })
     }
     pub fn poll(&mut self) -> Option<Result<(), String>> {
-        if self.done {
-            return None;
-        }
-        let result = match self.result.try_recv() {
-            Ok(result) => result,
-            Err(TryRecvError::Empty) => return None,
-            Err(TryRecvError::Disconnected) => {
-                Err("Dashboard worker stopped; try opening it again.".into())
-            }
-        };
-        self.done = true;
-        Some(result)
+        self.result
+            .poll_once("Dashboard worker stopped; try opening it again.")
     }
 }
 fn open_and_launch() -> Result<(), String> {
@@ -458,6 +444,7 @@ fn browser_command(path: &Path) -> Command {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pending::tests::wait;
     use std::{fs, os::unix::fs::PermissionsExt, path::PathBuf};
 
     /// Explicit #word vocabulary: alphanumeric plus `_`/`-`, case-insensitive,
@@ -726,6 +713,29 @@ mod tests {
         std::os::unix::fs::symlink(&dir, &alias).unwrap();
         assert!(write_private(&alias, "<!doctype html>x").is_err());
         assert_eq!(fs::read(&target).unwrap(), b"untouched");
+    }
+
+    #[test]
+    fn dashboard_worker_results_and_panics_are_reported_once_without_a_browser() {
+        for result in [Ok(()), Err("Fixture dashboard failure.".into())] {
+            let expected = result.clone();
+            let mut pending = PendingOpen::start_with(move || {
+                assert_eq!(std::thread::current().name(), Some("dashboard-open"));
+                result
+            })
+            .unwrap();
+            assert_eq!(wait(|| pending.poll()), expected);
+            assert!(pending.poll().is_none());
+        }
+        let mut stopped = PendingOpen::start_with(|| {
+            panic!("simulated dashboard worker panic");
+        })
+        .unwrap();
+        assert_eq!(
+            wait(|| stopped.poll()),
+            Err("Dashboard worker stopped; try opening it again.".into())
+        );
+        assert!(stopped.poll().is_none());
     }
 
     #[test]

@@ -4,13 +4,11 @@ use crate::{
     activity_log::{self, Entry},
     charts::DailyCharts,
     metadata::Vocabulary,
+    pending::Pending,
     private_fs,
     time::{Local, system_ms, to_local},
 };
-use std::{
-    sync::mpsc::{self, Receiver, TryRecvError},
-    time::Duration,
-};
+use std::time::Duration;
 
 pub const ROW_OPACITY: [u8; 3] = [20, 40, 70];
 const ROLL_DURATION: Duration = Duration::from_millis(160);
@@ -154,7 +152,7 @@ fn load_history(
 
 /// Loading is optional and never blocks keyboard input, guards, or dismissal.
 pub struct PendingHistory {
-    result: Receiver<Result<Recall, String>>,
+    result: Pending<Recall>,
 }
 impl PendingHistory {
     pub fn start() -> Result<Self, String> {
@@ -164,29 +162,21 @@ impl PendingHistory {
     fn start_with(
         read: impl FnOnce() -> Result<Recall, String> + Send + 'static,
     ) -> Result<Self, String> {
-        let (tx, result) = mpsc::sync_channel(1);
-        std::thread::Builder::new()
-            .name("activity-recall".into())
-            .spawn(move || {
-                let _ = tx.send(read());
-            })
+        let result = Pending::start("activity-recall", read)
             .map_err(|_| "Cannot load previous reflections.".to_owned())?;
         Ok(Self { result })
     }
     pub fn poll(&self) -> Option<Result<Recall, String>> {
-        match self.result.try_recv() {
-            Ok(result) => Some(result),
-            Err(TryRecvError::Empty) => None,
-            Err(TryRecvError::Disconnected) => {
-                Some(Err("Previous reflections could not be loaded.".into()))
-            }
-        }
+        self.result
+            .poll("Previous reflections could not be loaded.")
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pending::tests::wait;
+    use std::sync::mpsc;
     fn entry(text: &str, ms: u64) -> Entry {
         Entry {
             version: 1,
@@ -300,6 +290,32 @@ mod tests {
         assert_eq!(dial.window(Duration::from_secs(2)), 0.0);
         assert!(!Recall::default().older(Duration::ZERO));
     }
+    #[test]
+    fn history_worker_keeps_payload_and_repeated_stopped_errors() {
+        let pending = PendingHistory::start_with(|| {
+            assert_eq!(std::thread::current().name(), Some("activity-recall"));
+            Ok(Recall {
+                groups: vec![Group {
+                    text: "Fixture reflection".into(),
+                    timestamp_unix_ms: 0,
+                    count: 1,
+                }],
+                ..Recall::default()
+            })
+        })
+        .unwrap();
+        let history = wait(|| pending.poll()).unwrap();
+        assert_eq!(history.groups[0].text, "Fixture reflection");
+        assert_eq!(
+            wait(|| pending.poll()).unwrap_err(),
+            "Previous reflections could not be loaded."
+        );
+        assert_eq!(
+            pending.poll().unwrap().unwrap_err(),
+            "Previous reflections could not be loaded."
+        );
+    }
+
     #[test]
     fn stalled_history_worker_never_blocks_polling_and_reports_failure() {
         let (ready_tx, ready_rx) = mpsc::sync_channel(1);

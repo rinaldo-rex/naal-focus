@@ -11,6 +11,7 @@ pub mod focus;
 pub mod guard;
 pub mod metadata;
 pub mod overlay;
+mod pending;
 mod private_fs;
 pub mod process;
 pub mod recall;

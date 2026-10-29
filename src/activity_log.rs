@@ -1,6 +1,7 @@
 //! Private activity history with idempotent appends and atomic corrections.
 use crate::{
     metadata::Metadata,
+    pending::Pending,
     private_fs::{
         self, Scratch, check_owner, existing_dir, lock, lock_shared, open_at, private_dir,
     },
@@ -14,7 +15,6 @@ use std::{
     io::{BufRead, BufReader, Read, Seek, SeekFrom, Write},
     os::unix::fs::{MetadataExt, PermissionsExt},
     path::Path,
-    sync::mpsc::{self, Receiver, TryRecvError},
 };
 
 pub const MAX_ACTIVITY_CHARS: usize = 2000;
@@ -99,8 +99,7 @@ pub fn validate_text(text: &str) -> Result<(), String> {
 
 /// One in-flight durable save. Polling never blocks the input/render loop.
 pub struct PendingSave {
-    result: Receiver<Result<(), String>>,
-    done: bool,
+    result: Pending<()>,
 }
 impl PendingSave {
     pub fn start(entry: Entry) -> Result<Self, String> {
@@ -116,31 +115,13 @@ impl PendingSave {
         entry: Entry,
         write: impl FnOnce(Entry) -> Result<(), String> + Send + 'static,
     ) -> Result<Self, String> {
-        let (tx, rx) = mpsc::sync_channel(1);
-        std::thread::Builder::new()
-            .name("activity-save".into())
-            .spawn(move || {
-                let _ = tx.send(write(entry));
-            })
+        let result = Pending::start("activity-save", move || write(entry))
             .map_err(|_| "Cannot start activity save; try again.")?;
-        Ok(Self {
-            result: rx,
-            done: false,
-        })
+        Ok(Self { result })
     }
     pub fn poll(&mut self) -> Option<Result<(), String>> {
-        if self.done {
-            return None;
-        }
-        let result = match self.result.try_recv() {
-            Ok(result) => result,
-            Err(TryRecvError::Empty) => return None,
-            Err(TryRecvError::Disconnected) => {
-                Err("Activity save worker stopped; inspect the log before retrying.".into())
-            }
-        };
-        self.done = true;
-        Some(result)
+        self.result
+            .poll_once("Activity save worker stopped; inspect the log before retrying.")
     }
 }
 
@@ -367,11 +348,15 @@ fn append_transaction(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pending::tests::wait;
     use std::{
         fs::OpenOptions,
         os::fd::AsRawFd,
         path::PathBuf,
-        sync::atomic::{AtomicU64, Ordering},
+        sync::{
+            atomic::{AtomicU64, Ordering},
+            mpsc,
+        },
     };
     static NEXT: AtomicU64 = AtomicU64::new(0);
 
@@ -595,6 +580,30 @@ mod tests {
         let before = fs::read(&path).unwrap();
         assert!(append_in(&temp.0, &entry("New")).is_err());
         assert_eq!(fs::read(&path).unwrap(), before);
+    }
+
+    #[test]
+    fn worker_failures_keep_the_save_name_and_one_shot_messages() {
+        let mut failed = PendingSave::start_with(entry("Fixture"), |_| {
+            assert_eq!(std::thread::current().name(), Some("activity-save"));
+            Err("Fixture persistence failure.".into())
+        })
+        .unwrap();
+        assert_eq!(
+            wait(|| failed.poll()),
+            Err("Fixture persistence failure.".into())
+        );
+        assert!(failed.poll().is_none());
+
+        let mut stopped = PendingSave::start_with(entry("Fixture"), |_| {
+            panic!("simulated save worker panic");
+        })
+        .unwrap();
+        assert_eq!(
+            wait(|| stopped.poll()),
+            Err("Activity save worker stopped; inspect the log before retrying.".into())
+        );
+        assert!(stopped.poll().is_none());
     }
 
     #[test]
