@@ -102,6 +102,7 @@ pub struct Settings {
     pub enabled: bool,
     pub interval_secs: u64,
     pub duration_secs: u64,
+    pub reflections_enabled: bool,
     pub typing_limit_secs: u64,
     pub text_size: u32,
     pub idle_secs: u32,
@@ -119,6 +120,8 @@ impl Default for Settings {
             enabled: false,
             interval_secs: 300,
             duration_secs: 5,
+            // Keep reflection writing available for new and existing preferences.
+            reflections_enabled: true,
             typing_limit_secs: 120,
             text_size: 36,
             idle_secs: 120,
@@ -131,12 +134,28 @@ impl Default for Settings {
 }
 
 impl Settings {
+    /// Hiding reflections also hides their charts without erasing preferences.
+    pub fn overlay_charts(&self) -> ChartSettings {
+        if self.reflections_enabled {
+            self.charts.clone()
+        } else {
+            ChartSettings {
+                style: self.charts.style,
+                ..ChartSettings::default()
+            }
+        }
+    }
+
     /// Absolute bound, independent of renderer input or disk-worker progress.
     /// Eight seconds cover guard/configuration startup and cleanup.
     pub fn helper_lifetime_secs(&self) -> u64 {
         self.duration_secs
             .saturating_add(self.breathing.duration().as_secs())
-            .saturating_add(self.typing_limit_secs)
+            .saturating_add(if self.reflections_enabled {
+                self.typing_limit_secs
+            } else {
+                0
+            })
             .saturating_add(8)
     }
 
@@ -320,7 +339,77 @@ mod tests {
         assert!(!s.enabled);
         assert_eq!(s.interval_secs, 300);
         assert_eq!(s.duration_secs, 5);
+        assert!(s.reflections_enabled);
         s.validate().unwrap();
+    }
+
+    #[test]
+    fn reflections_default_on_for_legacy_settings_and_round_trip_both_states() {
+        let mut legacy = serde_json::to_value(Settings::default()).unwrap();
+        legacy
+            .as_object_mut()
+            .unwrap()
+            .remove("reflections_enabled");
+        let loaded: Settings = serde_json::from_value(legacy).unwrap();
+        assert!(loaded.reflections_enabled);
+        loaded.validate().unwrap();
+        for reflections_enabled in [false, true] {
+            let settings = Settings {
+                reflections_enabled,
+                ..Settings::default()
+            };
+            let bytes = serde_json::to_vec(&settings).unwrap();
+            assert_eq!(
+                serde_json::from_slice::<Settings>(&bytes).unwrap(),
+                settings
+            );
+        }
+        for invalid in [
+            r#"{"reflections_enabled":"off"}"#,
+            r#"{"reflections_enabled":null}"#,
+        ] {
+            assert!(serde_json::from_str::<Settings>(invalid).is_err());
+        }
+    }
+
+    #[test]
+    fn hiding_reflections_preserves_chart_preferences() {
+        for style in [ChartStyle::Heatmap, ChartStyle::Treemap] {
+            for mask in 0..8 {
+                let charts = ChartSettings {
+                    style,
+                    projects: mask & 1 != 0,
+                    feelings: mask & 2 != 0,
+                    tags: mask & 4 != 0,
+                };
+                let mut settings = Settings {
+                    reflections_enabled: false,
+                    charts: charts.clone(),
+                    ..Settings::default()
+                };
+                assert_eq!(settings.overlay_charts().kinds().count(), 0);
+                assert_eq!(settings.overlay_charts().style, style);
+                assert_eq!(settings.charts, charts);
+                settings.reflections_enabled = true;
+                assert_eq!(settings.overlay_charts(), charts);
+            }
+        }
+    }
+
+    #[test]
+    fn disabled_reflections_do_not_reserve_a_typing_watchdog_allowance() {
+        let mut settings = Settings {
+            duration_secs: 30,
+            typing_limit_secs: 600,
+            reflections_enabled: false,
+            ..Settings::default()
+        };
+        settings.validate().unwrap();
+        assert_eq!(settings.helper_lifetime_secs(), 14 + 30 + 8);
+        settings.breathing.enabled = false;
+        assert_eq!(settings.helper_lifetime_secs(), 30 + 8);
+        settings.reflections_enabled = true;
+        assert_eq!(settings.helper_lifetime_secs(), 30 + 600 + 8);
     }
 
     #[test]

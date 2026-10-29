@@ -50,6 +50,7 @@ pub fn render_with_charts(
         OverlayView {
             quote,
             text_size,
+            reflections_enabled: true,
             charts,
             focus: &crate::config::FocusSettings::default(),
         },
@@ -59,6 +60,7 @@ pub fn render_with_charts(
 pub struct OverlayView<'a> {
     pub quote: &'a str,
     pub text_size: f32,
+    pub reflections_enabled: bool,
     pub charts: &'a crate::config::ChartSettings,
     pub focus: &'a crate::config::FocusSettings,
 }
@@ -74,6 +76,7 @@ pub fn render_overlay(
     let OverlayView {
         quote,
         text_size,
+        reflections_enabled,
         charts,
         focus,
     } = view;
@@ -84,10 +87,14 @@ pub fn render_overlay(
     }
     let max_width = (content.width * 0.8).min(1100.0 * scale);
     // Quote, charts, and the existing history/input strip never overlap.
-    let quote_bottom = chart_damage_in(content, scale, charts).map_or_else(
-        || input_damage(content.width, content.height, scale).y,
-        |rect| rect.y,
-    );
+    let quote_bottom = if reflections_enabled {
+        chart_damage_in(content, scale, charts).map_or_else(
+            || input_damage(content.width, content.height, scale).y,
+            |rect| rect.y,
+        )
+    } else {
+        content.height
+    };
     let quote_height = (quote_bottom - 20.0 * scale).max(0.0);
     let mut size = text_size;
     let mut lines = wrap(font, quote, size, max_width);
@@ -805,6 +812,62 @@ pub fn default_font() -> Result<Font, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn disabled_reflections_reclaim_the_full_height_and_ignore_chart_reservations() {
+        let font = default_font().unwrap();
+        let no_charts = crate::config::ChartSettings::default();
+        let charts = crate::config::ChartSettings {
+            projects: true,
+            feelings: true,
+            tags: true,
+            ..Default::default()
+        };
+        for (width, height, scale) in [(1000, 650, 1.0), (1920, 1080, 1.0), (3414, 1920, 2.0)] {
+            for side in [
+                crate::config::FocusSide::Left,
+                crate::config::FocusSide::Right,
+            ] {
+                let focus = crate::config::FocusSettings {
+                    enabled: true,
+                    side,
+                    ..Default::default()
+                };
+                let draw = |reflections_enabled, charts| {
+                    let mut pixels = vec![0; width * height * 4];
+                    render_overlay(
+                        &mut pixels,
+                        (width, height),
+                        &font,
+                        scale,
+                        OverlayView {
+                            quote: "Take one breath.",
+                            text_size: 36.0 * scale,
+                            reflections_enabled,
+                            charts,
+                            focus: &focus,
+                        },
+                    );
+                    pixels
+                };
+                let disabled = draw(false, &charts);
+                assert_eq!(disabled, draw(false, &no_charts));
+                assert_ne!(disabled, draw(true, &no_charts));
+                let content = focus_content(width as f32, height as f32, scale, &focus);
+                let center_y = content.height * 0.5;
+                let near_center = Rect {
+                    y: center_y - 36.0 * scale,
+                    height: 72.0 * scale,
+                    ..content
+                };
+                let background = premultiply(BACKGROUND);
+                assert!(disabled.chunks_exact(4).enumerate().any(|(i, pixel)| {
+                    near_center.contains((i % width) as f32, (i / width) as f32)
+                        && pixel != background
+                }));
+            }
+        }
+    }
+
     #[test]
     fn metadata_and_suggestions_stay_inside_the_shared_desktop_damage_strip() {
         let font = default_font().unwrap();

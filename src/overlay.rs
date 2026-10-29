@@ -53,6 +53,7 @@ Usage: naal-focus-overlay [OPTIONS]
   --all                Cover all monitors (default)
   --output NAME        Cover one named monitor for manual testing
   --duration-secs N    Normal visible countdown, 1–30 (default 5)
+  --reflections MODE   on (default) or off; off hides writing, history, and charts
   --typing-limit-secs N  Typing deadline, 30–600 (default 120)
   --delay-secs N       Delay before showing, 0–60 (default 0)
   --text-size N        Logical text size, 22–72 (default 36)
@@ -73,8 +74,8 @@ Usage: naal-focus-overlay [OPTIONS]
   -h, --help           Print help
 
 WARNING: captures keyboard focus on all covered monitors. Type to reflect;
-During the breathing entrance, typing is ignored and Escape dismisses all.
-Afterward, Up/Down browse today's previous reflections; Enter recalls, then Enter saves.
+During the breathing entrance or with reflections off, typing is ignored and Escape dismisses all.
+With reflections on after the entrance, Up/Down browse history; Enter recalls, then saves.
 Use #tags, @projects, and ??feelings; arrows select suggestions, Tab inserts.
 After saving, Enter reopens the reflection for correction (or click it).
 With suggestions open, Enter saves as written; Escape closes suggestions first.
@@ -116,6 +117,13 @@ impl Options {
                 "--payload" => options.payload = true,
                 "--focus-history" => options.settings.focus.enabled = true,
                 "--focus-24-hour" => options.settings.focus.use_24_hour_time = true,
+                "--reflections" => {
+                    options.settings.reflections_enabled = match args.next().as_deref() {
+                        Some("on") => true,
+                        Some("off") => false,
+                        _ => return Err("--reflections requires on or off.".into()),
+                    };
+                }
                 "--breathing" => {
                     options.settings.breathing.enabled = match args.next().as_deref() {
                         Some("on") => true,
@@ -307,7 +315,8 @@ pub fn run(mut options: Options) -> Result<(), Box<dyn Error>> {
         font: None,
         quote: options.settings.quotes[0].clone(),
         text_size: options.settings.text_size,
-        charts: options.settings.charts.clone(),
+        reflections_enabled: options.settings.reflections_enabled,
+        charts: options.settings.overlay_charts(),
         chart_revision: 1,
         focus_settings: options.settings.focus.clone(),
         focus_snapshot,
@@ -505,6 +514,7 @@ struct App {
     font: Option<Font>,
     quote: String,
     text_size: u32,
+    reflections_enabled: bool,
     charts: ChartSettings,
     chart_revision: u64,
     focus_settings: crate::config::FocusSettings,
@@ -530,12 +540,12 @@ impl App {
                 .map_or(Duration::ZERO, |at| now.saturating_sub(at)),
         )
     }
-    fn reflection_ready(&self, now: Duration) -> bool {
-        self.entrance.ready(self.mapped_at, now)
+    fn reflection_input_ready(&self, now: Duration) -> bool {
+        self.reflections_enabled && self.entrance.ready(self.mapped_at, now)
     }
     fn submit(&mut self, now: Duration) {
         // One in-flight submission: repeated Enter/monitor events cannot duplicate it.
-        if self.save.is_some() || !self.reflection_ready(now) {
+        if self.save.is_some() || !self.reflection_input_ready(now) {
             return;
         }
         let Some((generation, text)) = self.activity.enter(now) else {
@@ -632,7 +642,7 @@ impl App {
         {
             return;
         }
-        if !self.reflection_ready(now) {
+        if !self.reflection_input_ready(now) {
             if event.keysym == Keysym::Escape && !repeated {
                 self.reason = Some("escape");
             }
@@ -744,7 +754,9 @@ impl App {
             Duration::from_millis(250)
         };
         if !self.dirty
-            && (!self.activity.field_visible() || now.saturating_sub(self.last_paint) < interval)
+            && ((!entrance.active && !self.reflections_enabled)
+                || !self.activity.field_visible()
+                || now.saturating_sub(self.last_paint) < interval)
         {
             return Ok(());
         }
@@ -760,11 +772,13 @@ impl App {
     }
     fn show(&mut self, qh: &QueueHandle<Self>, outputs: &[wl_output::WlOutput]) {
         self.requested_at = Some(boot_time());
-        match PendingHistory::start() {
-            Ok(pending) => self.pending_history = Some(pending),
-            Err(error) => {
-                self.history_unavailable = true;
-                eprintln!("Previous reflections unavailable: {error}");
+        if self.reflections_enabled {
+            match PendingHistory::start() {
+                Ok(pending) => self.pending_history = Some(pending),
+                Err(error) => {
+                    self.history_unavailable = true;
+                    eprintln!("Previous reflections unavailable: {error}");
+                }
             }
         }
         for output in outputs {
@@ -909,6 +923,7 @@ impl App {
                     render::OverlayView {
                         quote: &self.quote,
                         text_size: self.text_size as f32 * scale as f32,
+                        reflections_enabled: self.reflections_enabled,
                         charts: &self.charts,
                         focus: &self.focus_settings,
                     },
@@ -939,41 +954,43 @@ impl App {
                     self.focus_snapshot.as_ref(),
                 );
             }
-            let saving = self
-                .save
-                .as_ref()
-                .is_some_and(|job| job.generation == self.activity.generation());
-            render::render_input_in(
-                canvas,
-                (width as usize, height as usize),
-                self.font.as_ref().ok_or("Font not loaded")?,
-                scale as f32,
-                content,
-                render::InputView {
-                    editor: &self.activity.editor,
-                    suggestions: &self.activity.suggestions(),
-                    suggestion_index: self.activity.suggestion_index(),
-                    saved_text: self.activity.displayed_text(),
-                    progress: self.activity.typing_fraction(now),
-                    message: if saving {
-                        Some("Saving…")
-                    } else if let Some(error) = self.activity.error.as_deref() {
-                        Some(error)
-                    } else if self.history_unavailable && !self.activity.editing() {
-                        Some("Previous reflections unavailable · type to reflect")
-                    } else {
-                        None
+            if self.reflections_enabled {
+                let saving = self
+                    .save
+                    .as_ref()
+                    .is_some_and(|job| job.generation == self.activity.generation());
+                render::render_input_in(
+                    canvas,
+                    (width as usize, height as usize),
+                    self.font.as_ref().ok_or("Font not loaded")?,
+                    scale as f32,
+                    content,
+                    render::InputView {
+                        editor: &self.activity.editor,
+                        suggestions: &self.activity.suggestions(),
+                        suggestion_index: self.activity.suggestion_index(),
+                        saved_text: self.activity.displayed_text(),
+                        progress: self.activity.typing_fraction(now),
+                        message: if saving {
+                            Some("Saving…")
+                        } else if let Some(error) = self.activity.error.as_deref() {
+                            Some(error)
+                        } else if self.history_unavailable && !self.activity.editing() {
+                            Some("Previous reflections unavailable · type to reflect")
+                        } else {
+                            None
+                        },
+                        editing: self.activity.editing(),
+                        caret_visible: self.activity.recall.selected().is_none()
+                            && (now.as_millis() / 500).is_multiple_of(2),
+                        history: Some(render::HistoryView {
+                            recall: &self.activity.recall,
+                            now,
+                            now_ms: recall::system_ms(),
+                        }),
                     },
-                    editing: self.activity.editing(),
-                    caret_visible: self.activity.recall.selected().is_none()
-                        && (now.as_millis() / 500).is_multiple_of(2),
-                    history: Some(render::HistoryView {
-                        recall: &self.activity.recall,
-                        now,
-                        now_ms: recall::system_ms(),
-                    }),
-                },
-            );
+                );
+            }
             if entrance.active {
                 let cache = canvas.to_vec();
                 render::render_reveal(canvas, &cache, entrance.reflection);
@@ -1318,7 +1335,7 @@ impl PointerHandler for App {
         _: &wl_pointer::WlPointer,
         events: &[PointerEvent],
     ) {
-        if !self.reflection_ready(boot_time()) {
+        if !self.reflection_input_ready(boot_time()) {
             return;
         }
         for event in events {
@@ -1700,6 +1717,38 @@ mod tests {
                 .count(),
             0
         );
+    }
+
+    #[test]
+    fn reflections_cli_defaults_on_and_off_suppresses_charts_not_focus() {
+        assert!(parse(&[]).unwrap().unwrap().settings.reflections_enabled);
+        for (mode, enabled) in [("on", true), ("off", false)] {
+            let settings = parse(&[
+                "--reflections",
+                mode,
+                "--charts",
+                "projects,feelings,tags",
+                "--focus-history",
+            ])
+            .unwrap()
+            .unwrap()
+            .settings;
+            assert_eq!(settings.reflections_enabled, enabled);
+            assert_eq!(settings.charts.kinds().count(), 3);
+            assert_eq!(
+                settings.overlay_charts().kinds().count(),
+                if enabled { 3 } else { 0 }
+            );
+            assert!(settings.focus.enabled);
+            assert!(settings.breathing.enabled);
+        }
+        for args in [
+            vec!["--reflections"],
+            vec!["--reflections", "yes"],
+            vec!["--reflections", "false"],
+        ] {
+            assert!(parse(&args).is_err());
+        }
     }
 
     #[test]

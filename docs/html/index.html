@@ -168,8 +168,9 @@
       <div class="section-title"><span class="number">03</span><h2 id="reflection-title">Reflection &amp; context</h2></div>
       <figure>
         <a class="shot" href="screenshots/reflection.png" target="_blank" rel="noopener"><img src="screenshots/reflection.png" width="1920" height="1080" alt="Reflection screen with a quote, optional project/feeling/tag heatmaps, three previous reflections, metadata pills, a draft and time underline, and a right-hand window-time sidebar."></a>
-        <figcaption>Demo history; optional charts and focus tracking enabled. Both start off. <a href="screenshots/reflection-treemap.png" target="_blank" rel="noopener">Treemap variant ↗</a></figcaption>
+        <figcaption>Demo history; reflections enabled. Optional charts and focus tracking start off. <a href="screenshots/reflection-treemap.png" target="_blank" rel="noopener">Treemap variant ↗</a> · <a href="screenshots/reflections-off.png" target="_blank" rel="noopener">Reflections off ↗</a></figcaption>
       </figure>
+      <p class="brief">Turn <strong>Enable reflections</strong> off to hide writing, past reflections, metadata, hints, and charts. The quote, breathing, and optional focus sidebar remain. Saved history is kept.</p>
       <div class="legend">
         <dl><dt>Quote</dt><dd>The awareness prompt, not a task or instruction to log something.</dd></dl>
         <dl><dt>Charts</dt><dd>Today’s saved mentions. Heatmap = hourly counts; treemap = daily totals. Not time spent.</dd></dl>
@@ -201,8 +202,9 @@
           </dl>
         </article>
         <article class="setting-card" id="settings-reflection">
-          <a class="shot" href="screenshots/settings-reflection.png" target="_blank" rel="noopener"><img src="screenshots/settings-reflection.png" width="540" height="760" alt="Settings lower scroll position: focus-history preferences, typing time limit, quotes editor, and Save settings button."></a>
+          <a class="shot" href="screenshots/settings-reflection.png" target="_blank" rel="noopener"><img src="screenshots/settings-reflection.png" width="540" height="760" alt="Settings lower scroll position: focus-history preferences, Enable reflections switch, typing time limit, quotes editor, and Save settings button."></a>
           <dl>
+            <dt>Enable reflections</dt><dd>Show or hide the writing area, past reflections, and reflection charts. On by default.</dd>
             <dt>Typing time limit</dt><dd>A separate writing allowance: 2 minutes by default, adjustable from 30 seconds to 10 minutes.</dd>
             <dt>Quotes</dt><dd>Your rotating prompts. Start each with <code>- </code>; following lines belong to that quote.</dd>
             <dt>Save settings</dt><dd>Apply the draft together and restart the reminder interval.</dd>
@@ -252,7 +254,7 @@
       <details>
         <summary>About this reference</summary>
         <p>This is the canonical reference for product purpose and UI intent, starting with current behavior. Proposals are not promises. Revise it alongside agreed behavior changes; keep explanations short and replace screenshots when the UI changes.</p>
-        <p>Baseline: app version 0.1.0, source revision <code>a47c6987</code>, captured 29 October 2026. Applet/settings images use the production native views in an isolated capture window (not a redesigned mockup). Reminder images are offscreen frames from the production renderer on a neutral background. Dashboard images use the production HTML generator with fabricated data. No personal history or unrelated desktop content is included. Images open at full size.</p>
+        <p>Baseline: app version 0.1.0, guide baseline <code>cbd00dc4</code>, with the reflection-visibility switch added; captured 29 October 2026. Applet/settings images use the production native views in an isolated capture window (not a redesigned mockup). Reminder images are offscreen frames from the production renderer on a neutral background. Dashboard images use the production HTML generator with fabricated data. No personal history or unrelated desktop content is included. Images open at full size.</p>
         <p>Technical detail: <a href="../../README.md">Setup &amp; use</a> · <a href="../REFERENCE.md">Behavior reference</a> · <a href="../ARCHITECTURE.md">Architecture</a> · <a href="../TESTING.md">Verification</a>. UI implementation: <a href="../../src/applet.rs">Applet &amp; settings</a> · <a href="../../src/render.rs">Reminder</a> · <a href="../../src/dashboard_page.html">Dashboard</a>.</p>
       </details>
     </footer>

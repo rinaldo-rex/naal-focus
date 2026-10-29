@@ -109,6 +109,7 @@ fn concurrent_launches_reuse_one_window_and_closing_it_leaves_supervisor_running
     // another supervisor, and closing that process must leave the owner intact.
     let saved = Settings {
         interval_secs: 600,
+        reflections_enabled: false,
         ..initial
     };
     owner.request(Request::Settings(saved.clone()));

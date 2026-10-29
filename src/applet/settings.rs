@@ -15,6 +15,7 @@ pub fn numeric_field_error(value: &str, min: u64, max: u64) -> Option<String> {
 pub(super) struct SettingsForm {
     pub interval: String,
     pub duration: String,
+    pub reflections_enabled: bool,
     pub typing_limit: String,
     pub text_size: String,
     pub idle_secs: String,
@@ -32,6 +33,7 @@ impl SettingsForm {
         Self {
             interval: settings.interval_secs.to_string(),
             duration: settings.duration_secs.to_string(),
+            reflections_enabled: settings.reflections_enabled,
             typing_limit: settings.typing_limit_secs.to_string(),
             text_size: settings.text_size.to_string(),
             idle_secs: settings.idle_secs.to_string(),
@@ -101,6 +103,7 @@ impl SettingsForm {
                 .idle_secs
                 .parse()
                 .map_err(|_| "Idle threshold needs an integer.")?,
+            reflections_enabled: self.reflections_enabled,
             charts: self.charts.clone(),
             focus: self.focus.clone(),
             breathing: self.breathing.clone(),
@@ -249,6 +252,28 @@ mod tests {
         let mut clean = SettingsForm::new(&original);
         clean.sync(&saved, None);
         assert_eq!(clean.focus, saved.focus);
+    }
+
+    #[test]
+    fn reflection_toggle_preserves_dirty_drafts_and_post_save_edits() {
+        let original = Settings::default();
+        let mut form = SettingsForm::new(&original);
+        assert!(form.reflections_enabled);
+        form.reflections_enabled = false;
+        form.dirty = true;
+        form.sync(&original, None);
+        assert!(!form.reflections_enabled);
+        let saved = form.save(&original).unwrap();
+        assert!(!saved.reflections_enabled);
+        assert_eq!(saved.quotes, original.quotes);
+        assert_eq!(saved.charts, original.charts);
+        form.reflections_enabled = true;
+        assert!(form.sync(&saved, None));
+        assert!(form.reflections_enabled);
+        assert!(form.dirty);
+        let mut clean = SettingsForm::new(&original);
+        clean.sync(&saved, None);
+        assert!(!clean.reflections_enabled);
     }
 
     #[test]

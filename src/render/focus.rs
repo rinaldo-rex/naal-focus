@@ -551,6 +551,7 @@ mod tests {
                             OverlayView {
                                 quote: "Take one breath.",
                                 text_size: 36.0 * scale,
+                                reflections_enabled: true,
                                 charts: &ChartSettings::default(),
                                 focus: &settings,
                             },
@@ -630,6 +631,7 @@ mod tests {
                         OverlayView {
                             quote: "Take a breath.",
                             text_size: 36.0 * scale,
+                            reflections_enabled: true,
                             charts: &charts,
                             focus: &settings,
                         },

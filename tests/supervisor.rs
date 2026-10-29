@@ -65,6 +65,7 @@ fn monitor_clients_share_controls_and_take_over_without_duplicate_timers() {
 
     let settings = Settings {
         interval_secs: 60,
+        reflections_enabled: false,
         typing_limit_secs: 600,
         // Preferences synchronize without enabling collection of real titles.
         focus: config::FocusSettings {

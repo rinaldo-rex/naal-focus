@@ -471,6 +471,13 @@ fn helper_arguments(settings: &Settings) -> Vec<String> {
         "--payload".into(),
         "--duration-secs".into(),
         settings.duration_secs.to_string(),
+        "--reflections".into(),
+        if settings.reflections_enabled {
+            "on"
+        } else {
+            "off"
+        }
+        .into(),
         "--typing-limit-secs".into(),
         settings.typing_limit_secs.to_string(),
         "--text-size".into(),
@@ -558,6 +565,41 @@ fn launch(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn helper_receives_reflection_visibility_without_changing_other_preferences() {
+        for reflections_enabled in [false, true] {
+            let settings = Settings {
+                reflections_enabled,
+                charts: crate::config::ChartSettings {
+                    projects: true,
+                    feelings: true,
+                    tags: true,
+                    ..Default::default()
+                },
+                focus: crate::config::FocusSettings {
+                    enabled: true,
+                    ..Default::default()
+                },
+                ..Settings::default()
+            };
+            let helper = crate::overlay::Options::parse(helper_arguments(&settings))
+                .unwrap()
+                .unwrap();
+            assert_eq!(helper.settings.reflections_enabled, reflections_enabled);
+            assert_eq!(helper.settings.charts, settings.charts);
+            assert_eq!(helper.settings.focus, settings.focus);
+            assert_eq!(helper.settings.breathing, settings.breathing);
+            assert_eq!(
+                helper.settings.overlay_charts().kinds().count(),
+                if reflections_enabled { 3 } else { 0 }
+            );
+            assert_eq!(
+                helper.settings.helper_lifetime_secs(),
+                settings.helper_lifetime_secs()
+            );
+        }
+    }
 
     #[test]
     fn helper_receives_the_validated_typing_budget() {

@@ -67,6 +67,7 @@ pub enum Message {
     Interval(String),
     Duration(String),
     TypingLimit(String),
+    ReflectionsEnabled(bool),
     TextSize(String),
     IdleSecs(String),
     ChartStyle(usize),
@@ -278,6 +279,10 @@ impl App {
             );
         let reflection = widget::settings::section()
             .title("Reflection")
+            .add(widget::settings::item(
+                "Enable reflections",
+                widget::toggler(self.form.reflections_enabled).on_toggle(Message::ReflectionsEnabled),
+            ))
             .add(numeric_field(
                 "Typing time limit (30–600 seconds)",
                 "120",
@@ -655,6 +660,10 @@ impl cosmic::Application for App {
             }
             Message::Duration(text) => {
                 self.form.duration = text;
+                self.form.dirty = true;
+            }
+            Message::ReflectionsEnabled(enabled) => {
+                self.form.reflections_enabled = enabled;
                 self.form.dirty = true;
             }
             Message::TypingLimit(text) => {

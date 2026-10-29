@@ -37,7 +37,8 @@ Settings live at `$XDG_CONFIG_HOME/naal-focus/settings.json`, falling back to `~
 |---|---:|---|
 | Recurring reminders | Paused | Enabled/paused |
 | Interval | 300 seconds | 15–86400; greater than duration |
-| Reflection duration | 5 seconds | 1–30 seconds, after the entrance |
+| Reflection duration | 5 seconds | 1–30 seconds, after the entrance; also applies when reflections are off |
+| Enable reflections | On | Off hides writing, past reflections, metadata/suggestions, hints, and reflection charts |
 | Breathing entrance | On | On/off; separate from recurring reminders |
 | Breath pace | 4s in / 6s out | 3s/4s, 4s/6s, or 5s/5s |
 | Breaths | One | One or two |
@@ -86,6 +87,8 @@ Other pace values are `short` (3s/4s) and `even` (5s/5s). The helper accepts `--
 
 ## Activity reflections and history
 
+**Settings… → Reflection → Enable reflections** is on by default, including when loading existing version-1 settings. Turning it off hides the input, past reflections, metadata pills, suggestions, typing underline/hints, and all reflection charts across monitors. Breathing, the quote, and the separately enabled focus-history sidebar remain. The quote uses the freed height; the normal post-entrance duration still applies. Typing, Enter, arrows, Tab, and field clicks do nothing; **Esc** dismisses immediately. No reflection-history worker is started and no reflection is submitted. Stored history, quotes, chart choices, and the dashboard are unchanged; re-enabling restores the saved chart choices. Apply through the normal settings draft/save path. The helper accepts `--reflections on|off`; the supervisor forwards the switch explicitly and both watchdogs omit the unused typing allowance when off.
+
 After the breathing entrance, the overlay has one shared reflection across all covered monitors. Its single-line textbox is ready for input without clicking; the quote remains prominent. No typing means no logging and no change to the normal dismissal countdown.
 
 - Three rows above the textbox form a rolling dial of previous reflections from the current local day, loaded fresh for each reminder. Consecutive identical texts are grouped; separate runs of the same task remain separate. Newest is nearest the input, with bottom/middle/top text opacity **70% / 40% / 20%**. Only the highlighted row shows the latest occurrence's relative age and repeat count (for example, `5 min ago · ×3`). Long rows are visually shortened, never truncated in storage or recall.
@@ -119,7 +122,7 @@ New entries append; corrections atomically replace the matching entry while pres
 
 ## Overlay charts
 
-In **Settings… → Overlay charts**, choose one shared **Heatmap** or **Treemap** style and switch **Projects**, **Feelings**, and **Tags** independently. Apply with **Save settings**, like other preferences. With every switch off, the existing overlay is unchanged. Existing settings without a `charts` field also default to off.
+In **Settings… → Overlay charts**, choose one shared **Heatmap** or **Treemap** style and switch **Projects**, **Feelings**, and **Tags** independently. Apply with **Save settings**, like other preferences. With every switch off, the existing overlay is unchanged. Turning **Enable reflections** off suppresses all of these charts without changing their saved switches or style. Existing settings without a `charts` field also default to off.
 
 - **Heatmap**: one row per value and 24 local-hour columns, labeled `00`, `06`, `12`, `18`. Brighter cells mean more mentions in that hour; each category has its own intensity scale, stated below it. Future hours remain blank, distinct from elapsed hours with zero mentions.
 - **Treemap**: labeled tile areas reflect daily mention counts, with exact counts where space allows. Nested cuts keep the tiles readable; very small tiles and long labels are clipped/shortened visually, never in storage.
@@ -195,7 +198,7 @@ See [architecture and safety rationale](ARCHITECTURE.md) for supervisor election
 - Lock, idle, sleep, missing guard data, and stale guard data block reminders. Checks use logind, COSMIC's runtime lock marker, and Wayland `ext_idle_notifier_v1` version 2.
 - Returning from an unsafe session or a scheduling gap starts a full interval. `CLOCK_BOOTTIME` includes suspended time; missed reminders are discarded.
 - The helper uses the desktop `WAYLAND_DISPLAY`, ignoring the panel's nested `WAYLAND_SOCKET`. `NAAL_FOCUS_WAYLAND_DISPLAY` can override it.
-- Compositor closure, output hotplug, countdown expiry, or typing-limit expiry while writing dismisses all surfaces. Escape cancels an active draft first; without a draft it dismisses normally. Background clicks never cancel or dismiss. The supervisor kills and reaps unsafe/stalled helpers, with an independent duration-plus-typing-limit-plus-eight-second watchdog and parent-death signaling. Rendering failures pause recurrence.
+- Compositor closure, output hotplug, countdown expiry, or typing-limit expiry while writing dismisses all surfaces. Escape cancels an active draft first; without a draft it dismisses normally. Background clicks never cancel or dismiss. The supervisor kills and reaps unsafe/stalled helpers, with an independent entrance-plus-duration-plus-eight-second watchdog (plus the typing limit only when reflections are enabled) and parent-death signaling. Rendering failures pause recurrence.
 
 This is not a screen lock. Compositor shortcuts can still work; focus restoration is controlled by COSMIC. No inhibitors or system services are installed.
 
