@@ -16,11 +16,11 @@ pub fn run_settings() -> Result<(), Box<dyn Error>> {
             Ok(_window_lock) => {
                 cosmic::app::run_single_instance::<super::App>(
                     cosmic::app::Settings::default()
-                        .size(cosmic::iced::Size::new(540.0, 760.0))
+                        .size(cosmic::iced::Size::new(1000.0, 660.0))
                         .size_limits(
                             cosmic::iced::Limits::NONE
-                                .min_width(440.0)
-                                .min_height(360.0),
+                                .min_width(760.0)
+                                .min_height(480.0),
                         )
                         .exit_on_close(true),
                     super::Flags { standalone: true },

@@ -2,6 +2,121 @@
 use crate::config::{self, ChartSettings, FocusSettings, Settings};
 use cosmic::widget;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Page {
+    Reminders,
+    Breathing,
+    Reflections,
+    Charts,
+    Focus,
+    Appearance,
+    Quotes,
+}
+
+impl Page {
+    pub const ALL: [Self; 7] = [
+        Self::Reminders,
+        Self::Breathing,
+        Self::Reflections,
+        Self::Charts,
+        Self::Focus,
+        Self::Appearance,
+        Self::Quotes,
+    ];
+
+    pub fn title(self) -> &'static str {
+        match self {
+            Self::Reminders => "Reminders",
+            Self::Breathing => "Breathing",
+            Self::Reflections => "Reflections",
+            Self::Charts => "Reflection charts",
+            Self::Focus => "Window history",
+            Self::Appearance => "Appearance",
+            Self::Quotes => "Quotes",
+        }
+    }
+
+    fn icon(self) -> &'static str {
+        match self {
+            Self::Reminders => "accessories-clock-symbolic",
+            Self::Breathing => "weather-windy-symbolic",
+            Self::Reflections => "document-edit-symbolic",
+            Self::Charts => "view-list-symbolic",
+            Self::Focus => "video-display-symbolic",
+            Self::Appearance => "font-symbolic",
+            Self::Quotes => "insert-text-symbolic",
+        }
+    }
+}
+
+pub(super) struct Navigation {
+    pub model: widget::nav_bar::Model,
+}
+
+impl Default for Navigation {
+    fn default() -> Self {
+        let mut model = widget::nav_bar::Model::default();
+        for page in Page::ALL {
+            let id = model
+                .insert()
+                .text(page.title())
+                .icon(widget::icon::from_name(page.icon()).symbolic(true).size(16))
+                .data(page)
+                .id();
+            if matches!(page, Page::Focus | Page::Appearance) {
+                model.divider_above_set(id, true);
+            }
+        }
+        model.activate_position(0);
+        Self { model }
+    }
+}
+
+impl Navigation {
+    pub fn page(&self) -> Page {
+        self.model
+            .data(self.model.active())
+            .copied()
+            .unwrap_or(Page::Reminders)
+    }
+
+    pub fn select(&mut self, id: widget::nav_bar::Id) {
+        if self.model.data::<Page>(id).is_some() {
+            self.model.activate(id);
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct TimeInput {
+    pub minutes: String,
+    pub seconds: String,
+}
+
+impl TimeInput {
+    pub fn new(seconds: u64) -> Self {
+        Self {
+            minutes: (seconds / 60).to_string(),
+            seconds: (seconds % 60).to_string(),
+        }
+    }
+
+    pub fn parse(&self, name: &str, min: u64, max: u64) -> Result<u64, String> {
+        let minutes = self.minutes.parse::<u64>();
+        let seconds = self.seconds.parse::<u64>();
+        if let (Ok(minutes), Ok(seconds)) = (minutes, seconds)
+            && seconds < 60
+            && let Some(total) = minutes.checked_mul(60).and_then(|m| m.checked_add(seconds))
+            && (min..=max).contains(&total)
+        {
+            return Ok(total);
+        }
+        Err(format!(
+            "{name}: use whole minutes and 0–59 seconds ({min}–{max} seconds total)."
+        ))
+    }
+}
+
 /// Live per-field message for one numeric settings input, matching the
 /// ranges enforced by [`Settings::validate`]. `None` means the draft value
 /// can be saved.
@@ -13,12 +128,12 @@ pub fn numeric_field_error(value: &str, min: u64, max: u64) -> Option<String> {
 }
 
 pub(super) struct SettingsForm {
-    pub interval: String,
+    pub interval: TimeInput,
     pub duration: String,
     pub reflections_enabled: bool,
-    pub typing_limit: String,
+    pub typing_limit: TimeInput,
     pub text_size: String,
-    pub idle_secs: String,
+    pub idle_secs: TimeInput,
     pub charts: ChartSettings,
     pub focus: FocusSettings,
     pub breathing: crate::breathing::Settings,
@@ -31,12 +146,12 @@ pub(super) struct SettingsForm {
 impl SettingsForm {
     pub fn new(settings: &Settings) -> Self {
         Self {
-            interval: settings.interval_secs.to_string(),
+            interval: TimeInput::new(settings.interval_secs),
             duration: settings.duration_secs.to_string(),
             reflections_enabled: settings.reflections_enabled,
-            typing_limit: settings.typing_limit_secs.to_string(),
+            typing_limit: TimeInput::new(settings.typing_limit_secs),
             text_size: settings.text_size.to_string(),
-            idle_secs: settings.idle_secs.to_string(),
+            idle_secs: TimeInput::new(u64::from(settings.idle_secs)),
             charts: settings.charts.clone(),
             focus: settings.focus.clone(),
             breathing: settings.breathing.clone(),
@@ -81,28 +196,23 @@ impl SettingsForm {
         }
     }
 
+    pub fn validation_error(&self, settings: &Settings) -> Option<String> {
+        self.candidate(settings).err()
+    }
+
     fn candidate(&self, settings: &Settings) -> Result<Settings, String> {
         let candidate = Settings {
-            interval_secs: self
-                .interval
-                .parse()
-                .map_err(|_| "Interval needs an integer.")?,
+            interval_secs: self.interval.parse("Reminders", 15, 86_400)?,
             duration_secs: self
                 .duration
                 .parse()
                 .map_err(|_| "Duration needs an integer.")?,
-            typing_limit_secs: self
-                .typing_limit
-                .parse()
-                .map_err(|_| "Typing time limit needs an integer.")?,
+            typing_limit_secs: self.typing_limit.parse("Reflections", 30, 600)?,
             text_size: self
                 .text_size
                 .parse()
                 .map_err(|_| "Text size needs an integer.")?,
-            idle_secs: self
-                .idle_secs
-                .parse()
-                .map_err(|_| "Idle threshold needs an integer.")?,
+            idle_secs: self.idle_secs.parse("Idle threshold", 30, 3_600)? as u32,
             reflections_enabled: self.reflections_enabled,
             charts: self.charts.clone(),
             focus: self.focus.clone(),
@@ -121,6 +231,91 @@ mod tests {
     use super::*;
 
     #[test]
+    fn navigation_has_seven_direct_pages_and_does_not_touch_the_draft() {
+        let original = Settings::default();
+        let mut form = SettingsForm::new(&original);
+        let mut navigation = Navigation::default();
+        assert_eq!(navigation.page(), Page::Reminders);
+        form.interval = TimeInput::new(601);
+        form.quotes = widget::text_editor::Content::with_text("- Unsaved quote.");
+        form.dirty = true;
+        let pending = form.save(&original).unwrap();
+        form.interval.seconds = "2".into();
+        let ids: Vec<_> = navigation.model.iter().collect();
+        assert_eq!(ids.len(), Page::ALL.len());
+        for (id, page) in ids.into_iter().zip(Page::ALL) {
+            navigation.select(id);
+            assert_eq!(navigation.page(), page);
+            assert_eq!(form.interval, TimeInput::new(602));
+            assert!(form.dirty);
+            assert!(form.error.is_none());
+            assert_eq!(form.pending_save.as_ref(), Some(&pending));
+            assert_eq!(
+                config::parse_quotes(&form.quotes.text()).unwrap(),
+                ["Unsaved quote."]
+            );
+        }
+        assert!(form.sync(&pending, None));
+        assert!(form.dirty);
+        assert_eq!(form.interval, TimeInput::new(602));
+    }
+
+    #[test]
+    fn minutes_and_seconds_preserve_every_supported_second() {
+        for seconds in 15..=86_400 {
+            let input = TimeInput::new(seconds);
+            assert_eq!(input.parse("Interval", 15, 86_400), Ok(seconds));
+        }
+        for (min, max) in [(30, 600), (30, 3_600)] {
+            for seconds in [min, min + 1, 59, 60, 61, max - 1, max] {
+                assert_eq!(TimeInput::new(seconds).parse("Time", min, max), Ok(seconds));
+            }
+            assert!(TimeInput::new(min - 1).parse("Time", min, max).is_err());
+            assert!(TimeInput::new(max + 1).parse("Time", min, max).is_err());
+        }
+    }
+
+    #[test]
+    fn invalid_time_parts_cannot_save_or_overflow() {
+        for (minutes, seconds) in [
+            ("", "0"),
+            ("1.5", "0"),
+            ("-1", "0"),
+            ("1", "60"),
+            ("1", ""),
+            ("1", "0.5"),
+            ("18446744073709551615", "59"),
+        ] {
+            let input = TimeInput {
+                minutes: minutes.into(),
+                seconds: seconds.into(),
+            };
+            assert!(input.parse("Time", 15, 86_400).is_err());
+        }
+    }
+
+    #[test]
+    fn time_fields_keep_non_minute_preferences_and_validate_hidden_pages() {
+        let original = Settings {
+            interval_secs: 301,
+            idle_secs: 121,
+            typing_limit_secs: 119,
+            ..Settings::default()
+        };
+        let mut form = SettingsForm::new(&original);
+        assert_eq!(form.save(&original).unwrap(), original);
+        form.typing_limit.seconds = "60".into();
+        assert!(
+            form.validation_error(&original)
+                .unwrap()
+                .contains("Reflections")
+        );
+        assert!(form.save(&original).is_err());
+        form.typing_limit = TimeInput::new(119);
+        assert!(form.validation_error(&original).is_none());
+    }
+
+    #[test]
     fn numeric_field_error_reports_unsaveable_values_only() {
         assert!(numeric_field_error("600", 15, 86_400).is_none());
         assert_eq!(
@@ -137,7 +332,7 @@ mod tests {
     #[test]
     fn sync_reports_when_a_save_is_acknowledged() {
         let mut form = SettingsForm::new(&Settings::default());
-        form.interval = "600".into();
+        form.interval = TimeInput::new(600);
         let saved = form.save(&Settings::default()).unwrap();
         assert!(!form.sync(&Settings::default(), None));
         assert!(form.sync(&saved, None));
@@ -152,24 +347,24 @@ mod tests {
             ..Settings::default()
         };
         form.sync(&settings, None);
-        assert_eq!(form.interval, "600");
-        form.interval = "900".into();
+        assert_eq!(form.interval, TimeInput::new(600));
+        form.interval = TimeInput::new(900);
         form.dirty = true;
         form.sync(&Settings::default(), None);
-        assert_eq!(form.interval, "900");
+        assert_eq!(form.interval, TimeInput::new(900));
         assert!(form.dirty);
     }
 
     #[test]
     fn validation_errors_retain_draft_and_do_not_queue_a_save() {
         let mut form = SettingsForm::new(&Settings::default());
-        form.interval = "not a number".into();
+        form.interval.minutes = "not a number".into();
         form.dirty = true;
         assert!(form.save(&Settings::default()).is_err());
-        assert!(form.error.as_deref().unwrap().contains("integer"));
+        assert!(form.error.as_deref().unwrap().contains("whole minutes"));
         assert!(form.pending_save.is_none());
-        assert_eq!(form.interval, "not a number");
-        form.interval = "600".into();
+        assert_eq!(form.interval.minutes, "not a number");
+        form.interval = TimeInput::new(600);
         form.duration = "31".into();
         assert!(form.save(&Settings::default()).is_err());
         assert!(form.pending_save.is_none());
@@ -178,7 +373,7 @@ mod tests {
     #[test]
     fn save_uses_latest_enabled_state_and_requires_successful_acknowledgment() {
         let mut form = SettingsForm::new(&Settings::default());
-        form.interval = "600".into();
+        form.interval = TimeInput::new(600);
         form.dirty = true;
         let latest = Settings {
             enabled: true,
@@ -190,7 +385,7 @@ mod tests {
         assert!(form.dirty);
         form.sync(&candidate, Some("Could not save settings"));
         assert!(form.dirty);
-        assert_eq!(form.interval, "600");
+        assert_eq!(form.interval, TimeInput::new(600));
         form.sync(&candidate, None);
         assert!(!form.dirty);
         assert!(form.pending_save.is_none());
@@ -200,11 +395,11 @@ mod tests {
     fn editing_after_save_survives_acknowledgment() {
         let original = Settings::default();
         let mut form = SettingsForm::new(&original);
-        form.interval = "600".into();
+        form.interval = TimeInput::new(600);
         let saved = form.save(&original).unwrap();
-        form.interval = "900".into();
+        form.interval = TimeInput::new(900);
         form.sync(&saved, None);
-        assert_eq!(form.interval, "900");
+        assert_eq!(form.interval, TimeInput::new(900));
         assert!(form.dirty);
         assert!(form.pending_save.is_none());
     }

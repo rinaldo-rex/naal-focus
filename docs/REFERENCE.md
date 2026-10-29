@@ -29,7 +29,7 @@ Uninstalling also leaves `~/.naal-focus/` activity history untouched. Both scrip
 
 ## Settings and controls
 
-Click the panel/dock icon for a compact popup with status, the recurring-reminders toggle, **Show now**, **Snooze 15 min** (or **Resume** while snoozed), **Dashboard…**, and **Settings…**. Detailed preferences and quote editing live only in the dedicated settings window, grouped into **Timing**, **Appearance**, **Breathing entrance**, **Overlay charts**, **Focus history**, and **Reflection**. The window stays open when clicking elsewhere. Reopening settings activates the existing window rather than creating another; `naal-focus --settings` uses the same entry point.
+Click the panel/dock icon for a compact popup with status, the recurring-reminders toggle, **Show now**, **Snooze 15 min** (or **Resume** while snoozed), **Dashboard…**, and **Settings…**. Detailed preferences and quote editing live only in the dedicated settings window, with direct sidebar pages for **Reminders**, **Breathing**, **Reflections**, **Reflection charts**, **Window history**, **Appearance**, and **Quotes**. Save and validation stay visible; changing pages keeps the draft. Timing fields use minutes and seconds without losing one-second precision. The window stays open when clicking elsewhere. Reopening settings activates the existing window rather than creating another; `naal-focus --settings` uses the same entry point.
 
 Settings live at `$XDG_CONFIG_HOME/naal-focus/settings.json`, falling back to `~/.config/naal-focus/settings.json`. Saves are atomic. Invalid, oversized, or unsupported-version files remain untouched until explicit **Save settings** replaces them.
 
@@ -55,7 +55,7 @@ Settings live at `$XDG_CONFIG_HOME/naal-focus/settings.json`, falling back to `~
 | 24-hour time | Off (12-hour AM/PM) | Applies to focus-sidebar clock and timeline labels |
 | Quotes | Four reminders | 1–100; ≤500 characters each, including line breaks |
 
-- **Save settings** applies edited fields together, cancels pending/visible reminders, and restarts the interval. The settings window follows shared saved values without overwriting unsaved edits. A failed save retains its draft.
+- **Save settings** applies edited fields together, cancels pending/visible reminders, and restarts the interval. A valid draft also saves when the window loses focus; resizing or switching pages does not save it. The settings window follows shared saved values without overwriting unsaved edits. A failed save retains its draft.
 - **Recurring reminders** persists immediately.
 - **Snooze 15 min** is temporary. A full interval follows the snooze; it does not survive closing every instance.
 - **Resume** replaces Snooze while snoozed. It clears the snooze, or enables reminders if they were paused. Otherwise use the recurring-reminders toggle to unpause.
@@ -69,7 +69,7 @@ The native overlay chooses one allowed family and a fresh random seed for each r
 
 The entrance fades in for two seconds, guides one or two complete breaths, then fades out the geometry and reveals the normal overlay over two seconds. Default timing is **14 seconds**, or **24 seconds** with two 4s/6s breaths; the shorter pace takes **11 or 18 seconds**. Quote, reflection/history, charts, and focus sidebar stay hidden during breathing. The full normal reflection duration and fixed typing allowance are preserved. All typing, Enter, and field clicks are ignored until the reveal finishes; **Escape dismisses every output immediately**. Safety cancellation and both watchdogs remain active throughout.
 
-**Settings… → Breathing entrance** offers on/off, reduced motion, pace, breath count, and four family switches. Selecting no families is a validation error, not a silent fallback. Reduced motion freezes the shape but retains the chosen timing, breath cues, and gentle fades. Switching the entrance off restores immediate reflection and the old lifetime budget. Existing version-1 settings default to breathing on, all four families, one balanced breath, and reduced motion off; recurrence remains unchanged.
+**Settings… → Breathing** offers on/off, reduced motion, pace, breath count, and four family switches. Selecting no families is a validation error, not a silent fallback. Reduced motion freezes the shape but retains the chosen timing, breath cues, and gentle fades. Switching the entrance off restores immediate reflection and the old lifetime budget. Existing version-1 settings default to breathing on, all four families, one balanced breath, and reduced motion off; recurrence remains unchanged.
 
 The optional settings object is:
 
@@ -87,7 +87,7 @@ Other pace values are `short` (3s/4s) and `even` (5s/5s). The helper accepts `--
 
 ## Activity reflections and history
 
-**Settings… → Reflection → Enable reflections** is on by default, including when loading existing version-1 settings. Turning it off hides the input, past reflections, metadata pills, suggestions, typing underline/hints, and all reflection charts across monitors. Breathing, the quote, and the separately enabled focus-history sidebar remain. The quote uses the freed height; the normal post-entrance duration still applies. Typing, Enter, arrows, Tab, and field clicks do nothing; **Esc** dismisses immediately. No reflection-history worker is started and no reflection is submitted. Stored history, quotes, chart choices, and the dashboard are unchanged; re-enabling restores the saved chart choices. Apply through the normal settings draft/save path. The helper accepts `--reflections on|off`; the supervisor forwards the switch explicitly and both watchdogs omit the unused typing allowance when off.
+**Settings… → Reflections → Enable reflections** is on by default, including when loading existing version-1 settings. Turning it off hides the input, past reflections, metadata pills, suggestions, typing underline/hints, and all reflection charts across monitors. Breathing, the quote, and the separately enabled focus-history sidebar remain. The quote uses the freed height; the normal post-entrance duration still applies. Typing, Enter, arrows, Tab, and field clicks do nothing; **Esc** dismisses immediately. No reflection-history worker is started and no reflection is submitted. Stored history, quotes, chart choices, and the dashboard are unchanged; re-enabling restores the saved chart choices. Apply through the normal settings draft/save path. The helper accepts `--reflections on|off`; the supervisor forwards the switch explicitly and both watchdogs omit the unused typing allowance when off.
 
 After the breathing entrance, the overlay has one shared reflection across all covered monitors. Its single-line textbox is ready for input without clicking; the quote remains prominent. No typing means no logging and no change to the normal dismissal countdown.
 
@@ -122,7 +122,7 @@ New entries append; corrections atomically replace the matching entry while pres
 
 ## Overlay charts
 
-In **Settings… → Overlay charts**, choose one shared **Heatmap** or **Treemap** style and switch **Projects**, **Feelings**, and **Tags** independently. Apply with **Save settings**, like other preferences. With every switch off, the existing overlay is unchanged. Turning **Enable reflections** off suppresses all of these charts without changing their saved switches or style. Existing settings without a `charts` field also default to off.
+In **Settings… → Reflection charts**, choose one shared **Heatmap** or **Treemap** style and switch **Projects**, **Feelings**, and **Tags** independently. Apply with **Save settings**, like other preferences. With every switch off, the existing overlay is unchanged. Turning **Enable reflections** off suppresses all of these charts without changing their saved switches or style. Existing settings without a `charts` field also default to off.
 
 - **Heatmap**: one row per value and 24 local-hour columns, labeled `00`, `06`, `12`, `18`. Brighter cells mean more mentions in that hour; each category has its own intensity scale, stated below it. Future hours remain blank, distinct from elapsed hours with zero mentions.
 - **Treemap**: labeled tile areas reflect daily mention counts, with exact counts where space allows. Nested cuts keep the tiles readable; very small tiles and long labels are clipped/shortened visually, never in storage.
@@ -134,7 +134,7 @@ The optional version-1 settings field is `"charts": {"style": "heatmap", "projec
 
 ## Focus history
 
-**Settings… → Focus history → Track window time** opts in to collecting foreground application IDs and window titles through COSMIC's native window-info protocols. It is off for new and existing settings. **Graph** offers **Time spent**, **Day timeline**, and **Timeline + totals** (default); **Sidebar** offers **Left** and **Right** (default). **24-hour time** switches the sidebar clock, hourly timeline labels, and end time between 12-hour AM/PM (default, including existing settings) and 24-hour time. Compact timeline ticks use labels such as `12 PM` or `12`; complete times use `12:05 PM` or `12:05`. Duration totals and the reflection dashboard are unchanged. These preferences use the same shared settings draft/save path as other fields. Standalone helpers default to 12-hour time; `--focus-24-hour` selects 24-hour labels without enabling tracking.
+**Settings… → Window history → Track window time** opts in to collecting foreground application IDs and window titles through COSMIC's native window-info protocols. It is off for new and existing settings. **Graph** offers **Time spent**, **Day timeline**, and **Timeline + totals** (default); **Position** offers **Left** and **Right** (default). **24-hour time** switches the sidebar clock, hourly timeline labels, and end time between 12-hour AM/PM (default, including existing settings) and 24-hour time. Compact timeline ticks use labels such as `12 PM` or `12`; complete times use `12:05 PM` or `12:05`. Duration totals and the reflection dashboard are unchanged. These preferences use the same shared settings draft/save path as other fields. Standalone helpers default to 12-hour time; `--focus-24-hour` selects 24-hour labels without enabling tracking.
 
 - Tracking is independent of recurring reminders and snooze. Closing every applet/settings instance stops it; no separately installed service runs. Disabling tracking stops collection but keeps today's already collected records until normal day cleanup.
 - One shared supervisor records the active window once across all monitors. Foreground-window time is not proof of attention. Same application ID/title pairs are combined in totals; browser tabs are distinguishable only by the title exposed by the browser. Private/incognito windows are not automatically excluded, and titles may reveal documents or conversations. No screenshots, page content, URLs beyond what appears in a title, raw keys, or input events are recorded.
@@ -214,7 +214,7 @@ This is not a screen lock. Compositor shortcuts can still work; focus restoratio
 
 | Files | Responsibility |
 |---|---|
-| `src/applet.rs`, `src/applet/` | Quick popup, grouped settings draft, desktop launch and single-window activation |
+| `src/applet.rs`, `src/applet/` | Quick popup, sidebar settings pages and shared draft, desktop launch and single-window activation |
 | `src/config.rs` | Settings, chart/focus preferences, quote parsing/formatting, persistence |
 | `src/focus.rs`, `src/focus/`, `src/render/focus.rs` | Foreground-time accounting, today-only storage, COSMIC observer, native focus sidebar |
 | `src/charts.rs`, `src/render/charts.rs` | Local-day/hour mention aggregation, correction reconciliation, native heatmap/treemap layout |

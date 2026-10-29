@@ -21,6 +21,10 @@ check-native:
 check-settings:
     ./scripts/test-settings.sh
 
+# Demo-only native settings window; no supervisor, reminders, or private data.
+preview-settings output="/tmp/naal-settings-native" width="1000" height="660":
+    ./scripts/test-settings.sh capture "{{output}}" "{{width}}" "{{height}}"
+
 # Offscreen PPM snapshots/timings; no Wayland connection or keyboard focus.
 preview-breathing output="/tmp/naal-breathing-native":
     cargo run --locked --release --example breathing-preview -- "{{output}}"

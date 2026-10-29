@@ -38,6 +38,10 @@ required-features = ["applet"]
 name = "naal-focus-overlay"
 path = "src/bin/overlay.rs"
 
+[[example]]
+name = "settings-preview"
+required-features = ["applet"]
+
 [profile.release]
 lto = "thin"
 strip = true

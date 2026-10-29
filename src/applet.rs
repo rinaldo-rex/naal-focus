@@ -18,9 +18,10 @@ use std::time::{Duration, Instant};
 
 mod launch;
 mod settings;
+mod settings_view;
 pub use launch::run_settings;
 use launch::settings_command;
-use settings::SettingsForm;
+use settings::{Navigation, SettingsForm};
 
 #[derive(Clone, Copy, Default)]
 pub struct Flags {
@@ -45,6 +46,7 @@ pub struct App {
     engine: Engine,
     status: Status,
     form: SettingsForm,
+    settings_nav: Navigation,
     saved_at: Option<Instant>,
 }
 
@@ -64,12 +66,16 @@ pub enum Message {
     ShowNow,
     Snooze,
     Resume,
-    Interval(String),
+    SettingsPage(widget::nav_bar::Id),
+    IntervalMinutes(String),
+    IntervalSeconds(String),
     Duration(String),
-    TypingLimit(String),
+    TypingMinutes(String),
+    TypingSeconds(String),
     ReflectionsEnabled(bool),
     TextSize(String),
-    IdleSecs(String),
+    IdleMinutes(String),
+    IdleSeconds(String),
     ChartStyle(usize),
     ChartProjects(bool),
     ChartFeelings(bool),
@@ -88,12 +94,6 @@ pub enum Message {
     WindowFocus { id: Id, focused: bool },
     Surface(cosmic::surface::Action<Message>),
 }
-
-const CHART_STYLES: [&str; 2] = ["Heatmap — hourly mentions", "Treemap — daily mentions"];
-const FOCUS_STYLES: [&str; 3] = ["Time spent", "Day timeline", "Timeline + totals"];
-const FOCUS_SIDES: [&str; 2] = ["Left", "Right"];
-const BREATH_PACES: [&str; 3] = ["3s in / 4s out", "4s in / 6s out", "5s in / 5s out"];
-const BREATH_COUNTS: [&str; 2] = ["One breath", "Two breaths"];
 
 impl App {
     fn quick_controls(&self) -> Element<'_, Message> {
@@ -138,203 +138,6 @@ impl App {
             .into()
     }
 
-    fn settings_view(&self) -> Element<'_, Message> {
-        let timing = widget::settings::section()
-            .title("Timing")
-            .add(numeric_field(
-                "Interval (seconds)",
-                "300",
-                &self.form.interval,
-                15,
-                86_400,
-                Message::Interval,
-            ))
-            .add(numeric_field(
-                "Reflection duration (1–30 seconds)",
-                "5",
-                &self.form.duration,
-                1,
-                30,
-                Message::Duration,
-            ))
-            .add(numeric_field(
-                "Skip after idle (seconds)",
-                "120",
-                &self.form.idle_secs,
-                30,
-                3_600,
-                Message::IdleSecs,
-            ));
-        let appearance = widget::settings::section()
-            .title("Appearance")
-            .add(numeric_field(
-                "Text size (22–72 px)",
-                "36",
-                &self.form.text_size,
-                22,
-                72,
-                Message::TextSize,
-            ));
-        let mut breathing = widget::settings::section()
-            .title("Breathing entrance")
-            .add(widget::settings::item(
-                "Breathe before reflecting",
-                widget::toggler(self.form.breathing.enabled).on_toggle(Message::BreathingEnabled),
-            ))
-            .add(widget::settings::item(
-                "Reduced motion",
-                widget::toggler(self.form.breathing.reduced_motion)
-                    .on_toggle(Message::BreathingReducedMotion),
-            ))
-            .add(widget::settings::item(
-                "Pace",
-                widget::dropdown(
-                    &BREATH_PACES[..],
-                    crate::breathing::Pace::ALL
-                        .iter()
-                        .position(|pace| *pace == self.form.breathing.pace),
-                    Message::BreathingPace,
-                ),
-            ))
-            .add(widget::settings::item(
-                "Breaths",
-                widget::dropdown(
-                    &BREATH_COUNTS[..],
-                    Some(usize::from(self.form.breathing.cycles.saturating_sub(1))),
-                    Message::BreathingCycles,
-                ),
-            ));
-        for family in crate::breathing::Family::ALL {
-            breathing = breathing.add(widget::settings::item(
-                family.label(),
-                widget::toggler(self.form.breathing.families.contains(&family))
-                    .on_toggle(move |enabled| Message::BreathingFamily(family, enabled)),
-            ));
-        }
-        if let Err(error) = self.form.breathing.validate() {
-            breathing = breathing
-                .add(widget::text(error).class(cosmic::theme::Text::Custom(error_text_style)));
-        }
-        let charts = widget::settings::section()
-            .title("Overlay charts")
-            .add(widget::settings::item(
-                "Chart style",
-                widget::dropdown(
-                    &CHART_STYLES[..],
-                    Some(match self.form.charts.style {
-                        ChartStyle::Heatmap => 0,
-                        ChartStyle::Treemap => 1,
-                    }),
-                    Message::ChartStyle,
-                ),
-            ))
-            .add(widget::settings::item(
-                "Projects",
-                widget::toggler(self.form.charts.projects).on_toggle(Message::ChartProjects),
-            ))
-            .add(widget::settings::item(
-                "Feelings",
-                widget::toggler(self.form.charts.feelings).on_toggle(Message::ChartFeelings),
-            ))
-            .add(widget::settings::item(
-                "Tags",
-                widget::toggler(self.form.charts.tags).on_toggle(Message::ChartTags),
-            ))
-            .add(widget::text("Today’s saved mentions, not time spent. All switches off hides charts. Heatmap shows hourly counts; Treemap shows daily totals.").size(12));
-        let focus = widget::settings::section()
-            .title("Focus history")
-            .add(widget::settings::item(
-                "Track window time",
-                widget::toggler(self.form.focus.enabled).on_toggle(Message::FocusEnabled),
-            ))
-            .add(widget::settings::item(
-                "Graph",
-                widget::dropdown(
-                    &FOCUS_STYLES[..],
-                    Some(match self.form.focus.style {
-                        FocusStyle::Totals => 0,
-                        FocusStyle::Timeline => 1,
-                        FocusStyle::Both => 2,
-                    }),
-                    Message::FocusStyle,
-                ),
-            ))
-            .add(widget::settings::item(
-                "Sidebar",
-                widget::dropdown(
-                    &FOCUS_SIDES[..],
-                    Some(match self.form.focus.side {
-                        FocusSide::Left => 0,
-                        FocusSide::Right => 1,
-                    }),
-                    Message::FocusSide,
-                ),
-            ))
-            .add(widget::settings::item(
-                "24-hour time",
-                widget::toggler(self.form.focus.use_24_hour_time).on_toggle(Message::Focus24Hour),
-            ))
-            .add(
-                widget::text("App names and window titles · Today only · Stored locally").size(12),
-            );
-        let reflection = widget::settings::section()
-            .title("Reflection")
-            .add(widget::settings::item(
-                "Enable reflections",
-                widget::toggler(self.form.reflections_enabled).on_toggle(Message::ReflectionsEnabled),
-            ))
-            .add(numeric_field(
-                "Typing time limit (30–600 seconds)",
-                "120",
-                &self.form.typing_limit,
-                30,
-                600,
-                Message::TypingLimit,
-            ))
-            .add(
-                widget::column([])
-                    .spacing(8)
-                    .push(widget::text::heading("Quotes — bullet-separated"))
-                    .push(widget::text("Start each quote with “- ” at the left edge.\nFollowing lines and paragraphs stay in that quote.").size(12))
-                    .push(
-                        widget::text_editor::text_editor(&self.form.quotes)
-                            .height(150)
-                            .on_action(Message::Quotes),
-                    )
-                    .push(widget::text("1–100 quotes, up to 500 characters each. Rotate in order.").size(12)),
-            );
-        let mut content = widget::column([]).spacing(20);
-        content = content.push_maybe(self.saved_at.is_some().then(save_banner));
-        content = content
-            .push(widget::text(&self.status.message))
-            .push(timing)
-            .push(appearance)
-            .push(breathing)
-            .push(charts)
-            .push(focus)
-            .push(reflection)
-            .push(widget::button::suggested("Save settings").on_press(Message::Save))
-            .push(
-                widget::text(
-                    "Paused on lock, idle, or sleep. A full interval starts after returning.",
-                )
-                .size(12),
-            );
-        if let Some(error) = &self.status.focus_error {
-            content = content.push(widget::text(format!("⚠ {error}")).size(12));
-        }
-        if self.form.dirty {
-            content =
-                content.push(widget::text("Unsaved edits — Save settings to apply.").size(12));
-        }
-        if let Some(error) = self.form.error.as_ref().or(self.status.error.as_ref()) {
-            content = content.push(widget::text(format!("⚠ {error}")).size(13));
-        }
-        widget::scrollable(content.padding(16))
-            .width(iced::Length::Fill)
-            .into()
-    }
-
     fn sync_status(&mut self, status: Status) {
         if self.form.sync(&status.settings, status.error.as_deref()) {
             self.saved_at = Some(Instant::now());
@@ -343,69 +146,7 @@ impl App {
     }
 }
 
-/// A validated numeric field rendered web-form style: the error lives
-/// directly under the input, not only at the bottom of the window.
-fn numeric_field<'a>(
-    title: &'a str,
-    placeholder: &'a str,
-    value: &'a str,
-    min: u64,
-    max: u64,
-    message: fn(String) -> Message,
-) -> Element<'a, Message> {
-    let mut control = widget::column![].push(
-        widget::text_input(placeholder, value)
-            .on_input(message)
-            .on_submit(|_| Message::Save)
-            .width(100),
-    );
-    if let Some(problem) = settings::numeric_field_error(value, min, max) {
-        control = control.push(
-            widget::text(problem)
-                .size(11)
-                .class(cosmic::theme::Text::Custom(error_text_style)),
-        );
-    }
-    widget::settings::item(title, control).into()
-}
-
-fn error_text_style(theme: &cosmic::Theme) -> cosmic::iced::widget::text::Style {
-    cosmic::iced::widget::text::Style {
-        color: Some(theme.cosmic().destructive_text_color().into()),
-        selected_fill: theme.cosmic().accent.base.into(),
-        selected_text_color: Some(theme.cosmic().on_accent_color().into()),
-    }
-}
-
 const SAVE_BANNER_SECS: u64 = 6;
-
-fn save_banner<'a>() -> Element<'a, Message> {
-    widget::container(
-        widget::row![]
-            .push(widget::text("✓").size(14))
-            .push(widget::text("Settings saved"))
-            .spacing(8),
-    )
-    .class(cosmic::theme::Container::custom(success_banner_style))
-    .padding([8, 14])
-    .width(iced::Length::Fill)
-    .into()
-}
-
-fn success_banner_style(theme: &cosmic::Theme) -> cosmic::iced::widget::container::Style {
-    cosmic::iced::widget::container::Style {
-        background: Some(cosmic::iced::Background::Color(
-            theme.cosmic().success.base.into(),
-        )),
-        text_color: Some(theme.cosmic().success.on.into()),
-        icon_color: Some(theme.cosmic().success.on.into()),
-        border: cosmic::iced::Border {
-            radius: theme.cosmic().corner_radii.radius_s.into(),
-            ..Default::default()
-        },
-        ..Default::default()
-    }
-}
 
 impl cosmic::Application for App {
     type Executor = cosmic::executor::Default;
@@ -445,6 +186,7 @@ impl cosmic::Application for App {
             status: engine.status(),
             engine,
             form: SettingsForm::new(&settings),
+            settings_nav: Navigation::default(),
             saved_at: None,
         };
         let task = if app.standalone {
@@ -467,7 +209,12 @@ impl cosmic::Application for App {
     }
     fn view(&self) -> Element<'_, Message> {
         if self.standalone {
-            return self.settings_view();
+            return settings_view::view(
+                &self.form,
+                &self.settings_nav,
+                &self.status,
+                self.saved_at.is_some(),
+            );
         }
         let handle = if self.status.settings.enabled && self.status.snoozed_secs.is_none() {
             widget::icon::from_svg_bytes(
@@ -507,10 +254,7 @@ impl cosmic::Application for App {
             Subscription::batch([
                 tick,
                 iced::window::open_events().map(Message::SettingsOpened),
-                iced::window::events().map(|(id, event)| Message::WindowFocus {
-                    id,
-                    focused: matches!(event, iced::window::Event::Focused),
-                }),
+                iced::window::events().map(settings_window_message),
             ])
         } else {
             Subscription::batch([
@@ -654,8 +398,22 @@ impl cosmic::Application for App {
                     return destroy_popup(popup);
                 }
             }
-            Message::Interval(text) => {
-                self.form.interval = text;
+            Message::SettingsPage(id) => {
+                self.settings_nav.select(id);
+                return iced::widget::scrollable::scroll_to(
+                    settings_view::page_scroll_id(),
+                    iced::widget::scrollable::AbsoluteOffset {
+                        x: None,
+                        y: Some(0.0),
+                    },
+                );
+            }
+            Message::IntervalMinutes(text) => {
+                self.form.interval.minutes = text;
+                self.form.dirty = true;
+            }
+            Message::IntervalSeconds(text) => {
+                self.form.interval.seconds = text;
                 self.form.dirty = true;
             }
             Message::Duration(text) => {
@@ -666,16 +424,24 @@ impl cosmic::Application for App {
                 self.form.reflections_enabled = enabled;
                 self.form.dirty = true;
             }
-            Message::TypingLimit(text) => {
-                self.form.typing_limit = text;
+            Message::TypingMinutes(text) => {
+                self.form.typing_limit.minutes = text;
+                self.form.dirty = true;
+            }
+            Message::TypingSeconds(text) => {
+                self.form.typing_limit.seconds = text;
                 self.form.dirty = true;
             }
             Message::TextSize(text) => {
                 self.form.text_size = text;
                 self.form.dirty = true;
             }
-            Message::IdleSecs(text) => {
-                self.form.idle_secs = text;
+            Message::IdleMinutes(text) => {
+                self.form.idle_secs.minutes = text;
+                self.form.dirty = true;
+            }
+            Message::IdleSeconds(text) => {
+                self.form.idle_secs.seconds = text;
                 self.form.dirty = true;
             }
             Message::ChartStyle(index) => {
@@ -794,6 +560,14 @@ impl cosmic::Application for App {
     }
 }
 
+fn settings_window_message((id, event): (Id, iced::window::Event)) -> Message {
+    Message::WindowFocus {
+        id,
+        // Only a real focus loss commits a draft, not resizing or moving it.
+        focused: !matches!(event, iced::window::Event::Unfocused),
+    }
+}
+
 fn quick_secondary_action(status: &Status) -> (&'static str, Message) {
     if status.snoozed_secs.is_some() {
         ("Resume", Message::Resume)
@@ -815,6 +589,24 @@ fn resume_request(status: &Status) -> Option<Request> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn only_real_focus_loss_can_trigger_an_implicit_save() {
+        let id = Id::unique();
+        for event in [
+            iced::window::Event::Focused,
+            iced::window::Event::Resized(iced::Size::new(900.0, 600.0)),
+        ] {
+            assert!(matches!(
+                settings_window_message((id, event)),
+                Message::WindowFocus { focused: true, .. }
+            ));
+        }
+        assert!(matches!(
+            settings_window_message((id, iced::window::Event::Unfocused)),
+            Message::WindowFocus { focused: false, .. }
+        ));
+    }
+
     #[test]
     fn native_editor_preserves_multiline_quotes_and_literal_bullets() {
         let quotes = vec![

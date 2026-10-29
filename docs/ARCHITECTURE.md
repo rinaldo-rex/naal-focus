@@ -16,7 +16,7 @@ flowchart TD
 
 | Component | Responsibility |
 |---|---|
-| `naal-focus` (`src/bin/applet.rs`, `src/applet.rs`) | COSMIC dock/panel icon and compact quick controls; Settings… / `--settings` opens or activates a dedicated grouped settings window. Built with the `applet` feature. |
+| `naal-focus` (`src/bin/applet.rs`, `src/applet.rs`) | COSMIC dock/panel icon and compact quick controls; Settings… / `--settings` opens or activates a dedicated sidebar settings window. Built with the `applet` feature. |
 | `Engine` (`src/engine.rs`) | Background control client or elected supervisor. Publishes shared status, applies requests, and owns at most one helper. |
 | `Schedule` (`src/schedule.rs`) | Pure interval, snooze, and sequential quote-rotation policy. |
 | `Guard` (`src/guard.rs`) | Checks session state through system D-Bus/logind and input idle state through Wayland. |
@@ -109,7 +109,7 @@ UI status is sampled rather than instantaneous: the owner processes its loop abo
 
 ## Quick controls and settings window
 
-The popup contains only status, immediate reminder controls, and a Settings… entry point. The separate resizable desktop window groups configuration into Timing, Appearance, Breathing entrance, Overlay charts, Focus history, and Reflection, with a native quote editor and explicit Save.
+The popup contains only status, immediate reminder controls, and a Settings… entry point. The separate resizable desktop window has seven direct sidebar pages: Reminders, Breathing, Reflections, Reflection charts, Window history, Appearance, and Quotes. One draft spans every page; navigation is independent of it. Save/status stay in a fixed footer, with a native quote editor that scrolls internally. Minutes/seconds inputs round-trip every supported whole-second setting. A valid draft still saves on focus loss, not on navigation or resize.
 
 `src/applet/launch.rs` launches the same binary with `--settings`, detached from the panel lifetime. It removes nested/privileged Wayland socket variables, resets panel scaling and stale launch-token overrides, and routes `WAYLAND_DISPLAY` to the validated desktop socket. COSMIC's applet-token subscription obtains a host-compositor activation token through the privileged channel; a panel-local token cannot authorize desktop focus. The window consumes the startup token after opening, while libcosmic handles tokens forwarded over its D-Bus activation interface for an existing window.
 

@@ -73,9 +73,6 @@
     kbd { font: inherit; font-weight: 650; }
     code { font: .9em ui-monospace, monospace; overflow-wrap: anywhere; }
     .setting-card img { border-radius: 9px; }
-    .setting-card dl { margin-top: 17px; }
-    .setting-card dt { font-size: 13px; }
-    .setting-card dd { font-size: 12px; margin-bottom: 13px; }
     .save-note { margin-top: 20px; padding-left: 14px; border-left: 2px solid var(--accent); font-size: 13px; }
     .dashboard-grid { margin-top: 26px; }
     .dashboard-grid .shot { aspect-ratio: 16 / 10; }
@@ -184,34 +181,45 @@
 
     <section id="settings" aria-labelledby="settings-title">
       <div class="section-title"><span class="number">04</span><h2 id="settings-title">Settings</h2></div>
-      <p class="brief">One scrollable window. Closing it leaves the applet running.</p>
-      <div class="three">
-        <article class="setting-card" id="settings-timing">
-          <a class="shot" href="screenshots/settings-timing.png" target="_blank" rel="noopener"><img src="screenshots/settings-timing.png" width="540" height="760" alt="Settings upper scroll position: reminder interval, reflection duration, idle threshold, text size, and breathing controls."></a>
-          <dl>
-            <dt>Timing</dt><dd>Interval between reminders, reflection duration after breathing, and the idle threshold.</dd>
-            <dt>Appearance</dt><dd>Quote text size.</dd>
-            <dt>Breathing entrance</dt><dd>On/off, reduced motion, pace, one or two breaths, and allowed pattern families. Keep at least one family.</dd>
-          </dl>
+      <p class="brief">Choose a section on the left; its controls stay together on the right. Closing Settings leaves the applet running.</p>
+      <div class="two">
+        <article class="setting-card screen-card" id="settings-reminders">
+          <a class="shot" href="screenshots/settings-reminders.png" target="_blank" rel="noopener"><img src="screenshots/settings-reminders.png" width="1000" height="660" alt="Reminder interval, reflection duration, and idle controls with persistent sidebar and Save footer."></a>
+          <h3>Reminders</h3>
+          <p>Reminder interval, reflection duration after breathing, and idle threshold. Enter minutes and seconds.</p>
         </article>
-        <article class="setting-card" id="settings-charts">
-          <a class="shot" href="screenshots/settings-charts.png" target="_blank" rel="noopener"><img src="screenshots/settings-charts.png" width="540" height="760" alt="Settings middle scroll position: four breathing pattern switches, chart style and categories, and focus-history controls."></a>
-          <dl>
-            <dt>Overlay charts</dt><dd>One chart style; independent Projects, Feelings, and Tags switches. All off hides charts.</dd>
-            <dt>Focus history</dt><dd>Opt into window-time tracking. Choose totals, timeline, or both; sidebar side; and 12/24-hour time.</dd>
-          </dl>
+        <article class="setting-card screen-card" id="settings-breathing">
+          <a class="shot" href="screenshots/settings-breathing.png" target="_blank" rel="noopener"><img src="screenshots/settings-breathing.png" width="1000" height="660" alt="Breathing entrance, pace, count, reduced motion, and four pattern choices on one page."></a>
+          <h3>Breathing</h3>
+          <p>Breath pace, count, reduced motion, and allowed patterns. Keep at least one pattern.</p>
         </article>
-        <article class="setting-card" id="settings-reflection">
-          <a class="shot" href="screenshots/settings-reflection.png" target="_blank" rel="noopener"><img src="screenshots/settings-reflection.png" width="540" height="760" alt="Settings lower scroll position: focus-history preferences, Enable reflections switch, typing time limit, quotes editor, and Save settings button."></a>
-          <dl>
-            <dt>Enable reflections</dt><dd>Show or hide the writing area, past reflections, and reflection charts. On by default.</dd>
-            <dt>Typing time limit</dt><dd>A separate writing allowance: 2 minutes by default, adjustable from 30 seconds to 10 minutes.</dd>
-            <dt>Quotes</dt><dd>Your rotating prompts. Start each with <code>- </code>; following lines belong to that quote.</dd>
-            <dt>Save settings</dt><dd>Apply the draft together and restart the reminder interval.</dd>
-          </dl>
+        <article class="setting-card screen-card" id="settings-reflection">
+          <a class="shot" href="screenshots/settings-reflection.png" target="_blank" rel="noopener"><img src="screenshots/settings-reflection.png" width="1000" height="660" alt="Enable reflections switch and separate typing time limit."></a>
+          <h3>Reflections</h3>
+          <p>Show or hide writing and past reflections. Set a separate typing allowance; saved history is kept.</p>
+        </article>
+        <article class="setting-card screen-card" id="settings-charts">
+          <a class="shot" href="screenshots/settings-charts.png" target="_blank" rel="noopener"><img src="screenshots/settings-charts.png" width="1000" height="660" alt="Reflection chart style and Projects, Feelings, and Tags switches."></a>
+          <h3>Reflection charts</h3>
+          <p>Choose a style and switch Projects, Feelings, and Tags independently. All off hides charts.</p>
+        </article>
+        <article class="setting-card screen-card" id="settings-focus">
+          <a class="shot" href="screenshots/settings-focus.png" target="_blank" rel="noopener"><img src="screenshots/settings-focus.png" width="1000" height="660" alt="Opt-in window tracking with graph, position, and clock-format controls."></a>
+          <h3>Window history</h3>
+          <p>Opt into local window-time tracking. Choose the graph, side, and 12/24-hour time.</p>
+        </article>
+        <article class="setting-card screen-card" id="settings-appearance">
+          <a class="shot" href="screenshots/settings-appearance.png" target="_blank" rel="noopener"><img src="screenshots/settings-appearance.png" width="1000" height="660" alt="Quote text-size control in its own settings page."></a>
+          <h3>Appearance</h3>
+          <p>Set the quote text size, with a sample to see its size.</p>
+        </article>
+        <article class="setting-card screen-card" id="settings-quotes">
+          <a class="shot" href="screenshots/settings-quotes.png" target="_blank" rel="noopener"><img src="screenshots/settings-quotes.png" width="1000" height="660" alt="Dedicated quotes editor with an always-visible Save footer."></a>
+          <h3>Quotes</h3>
+          <p>Edit your rotating prompts. Start each with <code>- </code>; following lines stay in that quote.</p>
         </article>
       </div>
-      <p class="save-note">Current behavior: a valid draft also saves when this window loses focus. The applet’s recurring-reminders switch saves immediately.</p>
+      <p class="save-note">Save applies the draft together and restarts the reminder interval. A valid draft also saves when the window loses focus. Switching sections keeps your edits; Save and errors stay visible.</p>
     </section>
 
     <section id="dashboard" aria-labelledby="dashboard-title">
@@ -254,8 +262,8 @@
       <details>
         <summary>About this reference</summary>
         <p>This is the canonical reference for product purpose and UI intent, starting with current behavior. Proposals are not promises. Revise it alongside agreed behavior changes; keep explanations short and replace screenshots when the UI changes.</p>
-        <p>Baseline: app version 0.1.0, guide baseline <code>cbd00dc4</code>, with the reflection-visibility switch added; captured 29 October 2026. Applet/settings images use the production native views in an isolated capture window (not a redesigned mockup). Reminder images are offscreen frames from the production renderer on a neutral background. Dashboard images use the production HTML generator with fabricated data. No personal history or unrelated desktop content is included. Images open at full size.</p>
-        <p>Technical detail: <a href="../../README.md">Setup &amp; use</a> · <a href="../REFERENCE.md">Behavior reference</a> · <a href="../ARCHITECTURE.md">Architecture</a> · <a href="../TESTING.md">Verification</a>. UI implementation: <a href="../../src/applet.rs">Applet &amp; settings</a> · <a href="../../src/render.rs">Reminder</a> · <a href="../../src/dashboard_page.html">Dashboard</a>.</p>
+        <p>Baseline: app version 0.1.0, guide baseline <code>cbd00dc4</code>, with reflection visibility and sidebar settings added; captured 29 October 2026. Applet/settings images use the production native views in an isolated capture window (not a redesigned mockup). Reminder images are offscreen frames from the production renderer on a neutral background. Dashboard images use the production HTML generator with fabricated data. No personal history or unrelated desktop content is included. Images open at full size.</p>
+        <p>Technical detail: <a href="../../README.md">Setup &amp; use</a> · <a href="../REFERENCE.md">Behavior reference</a> · <a href="../ARCHITECTURE.md">Architecture</a> · <a href="../TESTING.md">Verification</a>. UI implementation: <a href="../../src/applet.rs">Applet</a> · <a href="../../src/applet/settings_view.rs">Settings</a> · <a href="../../src/render.rs">Reminder</a> · <a href="../../src/dashboard_page.html">Dashboard</a>.</p>
       </details>
     </footer>
   </main>
