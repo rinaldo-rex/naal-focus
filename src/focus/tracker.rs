@@ -1,7 +1,7 @@
 //! One supervisor-owned tracker. No screenshots, input hooks, or subprocess polling.
 use super::{Clock, Day, Snapshot, Window, store};
 use crate::{
-    activity_log,
+    private_fs,
     process::{Singleton, boot_time, desktop_connection},
     time::system_ms,
 };
@@ -139,7 +139,7 @@ fn run(control: &Mutex<Control>, shared: &Mutex<Shared>, stop: &AtomicBool) -> R
             Err(_) => return Ok(()),
         }
     };
-    let directory: PathBuf = activity_log::directory()?;
+    let directory: PathBuf = private_fs::directory()?;
     let loaded = loop {
         match store::load_today_in(&directory, system_ms()) {
             Ok(day) => break day,

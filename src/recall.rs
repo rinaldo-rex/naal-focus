@@ -4,6 +4,7 @@ use crate::{
     activity_log::{self, Entry},
     charts::DailyCharts,
     metadata::Vocabulary,
+    private_fs,
     time::{Local, system_ms, to_local},
 };
 use std::{
@@ -158,7 +159,7 @@ pub struct PendingHistory {
 impl PendingHistory {
     pub fn start() -> Result<Self, String> {
         let now_ms = system_ms();
-        Self::start_with(move || load_history(&activity_log::directory()?, now_ms, to_local))
+        Self::start_with(move || load_history(&private_fs::directory()?, now_ms, to_local))
     }
     fn start_with(
         read: impl FnOnce() -> Result<Recall, String> + Send + 'static,

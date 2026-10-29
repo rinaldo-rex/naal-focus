@@ -4,6 +4,7 @@
 //! untrusted text is embedded as escaped JSON, never as HTML or script.
 use crate::{
     activity_log::{self, Entry},
+    private_fs,
     time::{Local, to_local, unix_millis},
 };
 use serde::Serialize;
@@ -373,18 +374,18 @@ fn escape_for_script(json: &str) -> String {
 /// current user, mode 0600, refusing symlinks, hardlinks, and foreign owners
 /// exactly like `activity.jsonl`. Replaces any earlier generation in place.
 fn write_private(directory: &Path, html: &str) -> Result<(), String> {
-    let dir = activity_log::private_dir(directory)?;
-    activity_log::lock(&dir)?;
-    let file = activity_log::open_at(&dir, c"dashboard.html", libc::O_WRONLY | libc::O_CREAT)
+    let dir = private_fs::private_dir(directory)?;
+    private_fs::lock(&dir)?;
+    let file = private_fs::open_at(&dir, c"dashboard.html", libc::O_WRONLY | libc::O_CREAT)
         .map_err(|e| format!("Dashboard output is unwritable: {e}"))?;
-    activity_log::check_owner(&file)?;
+    private_fs::check_owner(&file)?;
     let metadata = file.metadata().map_err(|e| e.to_string())?;
     if !metadata.is_file() || metadata.nlink() != 1 {
         return Err("Dashboard output must be a regular, unlinked-to-other-files file.".into());
     }
     file.set_permissions(Permissions::from_mode(0o600))
         .map_err(|e| e.to_string())?;
-    activity_log::lock(&file)?;
+    private_fs::lock(&file)?;
     let mut file = file;
     file.set_len(0).map_err(|e| e.to_string())?;
     file.write_all(html.as_bytes()).map_err(|e| e.to_string())?;
@@ -435,7 +436,7 @@ impl PendingOpen {
     }
 }
 fn open_and_launch() -> Result<(), String> {
-    let directory = activity_log::directory()?;
+    let directory = private_fs::directory()?;
     let html = match activity_log::load_lenient(&directory) {
         Ok((entries, skipped)) => generate_system(&entries, skipped),
         // An unreadable history still opens a restrained error page rather

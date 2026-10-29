@@ -1,35 +1,24 @@
 //! One private, atomically replaced daily file; no archive of window titles.
 use super::{Day, MAX_BYTES};
-use crate::{activity_log, time::to_local};
+use crate::{
+    private_fs::{self, Scratch},
+    time::to_local,
+};
 use std::{
     ffi::CString,
-    fs::{File, OpenOptions, Permissions},
+    fs::{File, Permissions},
     io::{Read, Write},
     os::{
         fd::AsRawFd,
-        unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
+        unix::fs::{MetadataExt, PermissionsExt},
     },
     path::Path,
 };
 
 const NAME: &std::ffi::CStr = c"focus.json";
 
-fn existing_dir(directory: &Path) -> Result<Option<File>, String> {
-    match OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
-        .open(directory)
-    {
-        Ok(dir) => {
-            activity_log::check_owner(&dir)?;
-            Ok(Some(dir))
-        }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(e.to_string()),
-    }
-}
 fn check_file(file: &File) -> Result<(), String> {
-    activity_log::check_owner(file)?;
+    private_fs::check_owner(file)?;
     let metadata = file.metadata().map_err(|e| e.to_string())?;
     if !metadata.is_file() || metadata.nlink() != 1 {
         return Err("Focus history must be a regular file with a single hard link.".into());
@@ -40,10 +29,10 @@ fn check_file(file: &File) -> Result<(), String> {
 /// Also purges a previous day's file, even when collection is disabled. Missing
 /// history never creates a directory. Run only on a background worker.
 pub fn load_today_in(directory: &Path, now_ms: u64) -> Result<Day, String> {
-    let Some(dir) = existing_dir(directory)? else {
+    let Some(dir) = private_fs::existing_dir(directory)? else {
         return Ok(Day::empty(now_ms));
     };
-    activity_log::lock(&dir)?;
+    private_fs::lock(&dir)?;
     // A crash between writing and renaming must not leave a hidden archive of
     // titles. Only our reserved, owner-checked regular scratch files are removed.
     let mut removed_scratch = false;
@@ -56,7 +45,7 @@ pub fn load_today_in(directory: &Path, now_ms: u64) -> Result<Day, String> {
             continue;
         }
         let name = CString::new(name).map_err(|e| e.to_string())?;
-        let file = activity_log::open_at(&dir, &name, libc::O_RDONLY).map_err(|e| e.to_string())?;
+        let file = private_fs::open_at(&dir, &name, libc::O_RDONLY).map_err(|e| e.to_string())?;
         check_file(&file)?;
         // SAFETY: live directory descriptor and checked NUL-terminated name.
         if unsafe { libc::unlinkat(dir.as_raw_fd(), name.as_ptr(), 0) } != 0 {
@@ -67,7 +56,7 @@ pub fn load_today_in(directory: &Path, now_ms: u64) -> Result<Day, String> {
     if removed_scratch {
         dir.sync_all().map_err(|e| e.to_string())?;
     }
-    let mut file = match activity_log::open_at(&dir, NAME, libc::O_RDONLY) {
+    let mut file = match private_fs::open_at(&dir, NAME, libc::O_RDONLY) {
         Ok(file) => file,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Day::empty(now_ms)),
         Err(e) => return Err(e.to_string()),
@@ -99,19 +88,6 @@ pub fn load_today_in(directory: &Path, now_ms: u64) -> Result<Day, String> {
     Ok(day)
 }
 
-struct Scratch<'a> {
-    dir: &'a File,
-    name: CString,
-}
-impl Drop for Scratch<'_> {
-    fn drop(&mut self) {
-        // SAFETY: live descriptor and the private NUL-terminated scratch filename.
-        unsafe {
-            libc::unlinkat(self.dir.as_raw_fd(), self.name.as_ptr(), 0);
-        }
-    }
-}
-
 pub fn save_in(directory: &Path, day: &Day, now_ms: u64) -> Result<(), String> {
     day.validate(now_ms)?;
     if day.date != to_local(now_ms).date_key() {
@@ -121,9 +97,9 @@ pub fn save_in(directory: &Path, day: &Day, now_ms: u64) -> Result<(), String> {
     if bytes.len() as u64 > MAX_BYTES {
         return Err("Today's focus history is full.".into());
     }
-    let dir = activity_log::private_dir(directory)?;
-    activity_log::lock(&dir)?;
-    match activity_log::open_at(&dir, NAME, libc::O_RDONLY) {
+    let dir = private_fs::private_dir(directory)?;
+    private_fs::lock(&dir)?;
+    match private_fs::open_at(&dir, NAME, libc::O_RDONLY) {
         Ok(file) => check_file(&file)?,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
         Err(e) => return Err(e.to_string()),
@@ -137,28 +113,14 @@ pub fn save_in(directory: &Path, day: &Day, now_ms: u64) -> Result<(), String> {
         ))
         .map_err(|e| e.to_string())?,
     };
-    let mut file = activity_log::open_at(
+    let mut file = private_fs::open_at(
         &dir,
         &scratch.name,
         libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL,
     )
     .map_err(|e| e.to_string())?;
-    file.write_all(&bytes)
-        .and_then(|()| file.sync_all())
-        .map_err(|e| e.to_string())?;
-    // SAFETY: live directory descriptor and two NUL-terminated names in it.
-    if unsafe {
-        libc::renameat(
-            dir.as_raw_fd(),
-            scratch.name.as_ptr(),
-            dir.as_raw_fd(),
-            NAME.as_ptr(),
-        )
-    } != 0
-    {
-        return Err(std::io::Error::last_os_error().to_string());
-    }
-    dir.sync_all().map_err(|e| e.to_string())
+    file.write_all(&bytes).map_err(|e| e.to_string())?;
+    scratch.replace(&file, NAME)
 }
 
 #[cfg(test)]
@@ -260,8 +222,8 @@ mod tests {
         fs::create_dir(&path).unwrap();
         assert!(load_today_in(&temp.0, NOW + 2000).is_err());
         fs::remove_dir(&path).unwrap();
-        let dir = activity_log::private_dir(&temp.0).unwrap();
-        activity_log::lock(&dir).unwrap();
+        let dir = private_fs::private_dir(&temp.0).unwrap();
+        private_fs::lock(&dir).unwrap();
         assert!(save_in(&temp.0, &day(), NOW + 2000).is_err());
         assert_eq!(fs::read(&target).unwrap(), b"untouched");
     }

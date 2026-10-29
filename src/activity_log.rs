@@ -1,16 +1,19 @@
 //! Private activity history with idempotent appends and atomic corrections.
-use crate::{metadata::Metadata, time::unix_millis};
+use crate::{
+    metadata::Metadata,
+    private_fs::{
+        self, Scratch, check_owner, existing_dir, lock, lock_shared, open_at, private_dir,
+    },
+    time::unix_millis,
+};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashSet,
-    ffi::{CStr, CString},
-    fs::{self, DirBuilder, File, OpenOptions},
+    ffi::CString,
+    fs::{self, File},
     io::{BufRead, BufReader, Read, Seek, SeekFrom, Write},
-    os::{
-        fd::{AsRawFd, FromRawFd},
-        unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt},
-    },
-    path::{Path, PathBuf},
+    os::unix::fs::{MetadataExt, PermissionsExt},
+    path::Path,
     sync::mpsc::{self, Receiver, TryRecvError},
 };
 
@@ -94,14 +97,6 @@ pub fn validate_text(text: &str) -> Result<(), String> {
     Ok(())
 }
 
-pub fn directory() -> Result<PathBuf, String> {
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .filter(|p| p.is_absolute())
-        .map(|p| p.join(".naal-focus"))
-        .ok_or_else(|| "An absolute HOME is required to save activity logs.".into())
-}
-
 /// One in-flight durable save. Polling never blocks the input/render loop.
 pub struct PendingSave {
     result: Receiver<Result<(), String>>,
@@ -113,7 +108,7 @@ impl PendingSave {
     }
     pub fn start_correction(original: Entry, entry: Entry) -> Result<Self, String> {
         Self::start_with(entry, move |entry| {
-            persist_in(&directory()?, Some(&original), &entry)
+            persist_in(&private_fs::directory()?, Some(&original), &entry)
                 .map_err(|e| format!("Activity correction failed: {e}"))
         })
     }
@@ -150,7 +145,7 @@ impl PendingSave {
 }
 
 pub fn save(entry: &Entry) -> Result<(), String> {
-    append_in(&directory()?, entry).map_err(|e| format!("Activity save failed: {e}"))
+    append_in(&private_fs::directory()?, entry).map_err(|e| format!("Activity save failed: {e}"))
 }
 
 /// Nonblocking file locking keeps concurrent writes out of one another's records.
@@ -227,27 +222,6 @@ fn persist_in(directory: &Path, original: Option<&Entry>, entry: &Entry) -> Resu
     }
 }
 
-/// The private `~/.naal-focus/` directory with link and owner guards.
-/// Opening it follows neither symlinks nor renamed/replaced paths.
-pub(crate) fn private_dir(directory: &Path) -> Result<File, String> {
-    match DirBuilder::new().mode(0o700).create(directory) {
-        Ok(()) => {}
-        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
-        Err(e) => return Err(e.to_string()),
-    }
-    // Open the directory itself without following a symlink, then use openat
-    // so a renamed/replaced path cannot redirect this save elsewhere.
-    let dir = OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
-        .open(directory)
-        .map_err(|e| e.to_string())?;
-    check_owner(&dir)?;
-    dir.set_permissions(fs::Permissions::from_mode(0o700))
-        .map_err(|e| e.to_string())?;
-    Ok(dir)
-}
-
 /// Lenient read-only history scan for read-only consumers such as the
 /// dashboard. Malformed, incomplete, oversized, duplicate, or blank lines
 /// are skipped individually and counted; valid entries still load. A missing
@@ -263,16 +237,9 @@ pub(crate) fn load_lenient_matching(
     directory: &Path,
     mut keep: impl FnMut(&Entry) -> bool,
 ) -> Result<(Vec<Entry>, usize), String> {
-    let dir = match OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
-        .open(directory)
-    {
-        Ok(dir) => dir,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok((Vec::new(), 0)),
-        Err(e) => return Err(e.to_string()),
+    let Some(dir) = existing_dir(directory)? else {
+        return Ok((Vec::new(), 0));
     };
-    check_owner(&dir)?;
     lock_shared(&dir)?;
     let mut file = match open_at(&dir, c"activity.jsonl", libc::O_RDONLY) {
         Ok(file) => file,
@@ -338,38 +305,6 @@ pub(crate) fn load_lenient_matching(
     Ok((entries, skipped))
 }
 
-pub(crate) fn lock(file: &File) -> Result<(), String> {
-    // SAFETY: a live descriptor; flock has no pointer arguments. Linux supports
-    // advisory locks on directory descriptors as well as regular files.
-    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
-        return Err("Activity history is busy; try again.".into());
-    }
-    Ok(())
-}
-pub(crate) fn lock_shared(file: &File) -> Result<(), String> {
-    // SAFETY: a live descriptor; flock has no pointer arguments. Linux supports
-    // advisory locks on directory descriptors as well as regular files.
-    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_SH | libc::LOCK_NB) } != 0 {
-        return Err("Activity history is busy; try again.".into());
-    }
-    Ok(())
-}
-pub(crate) fn open_at(dir: &File, name: &CStr, flags: libc::c_int) -> Result<File, std::io::Error> {
-    // SAFETY: live directory and NUL-terminated name; mode accompanies O_CREAT.
-    let fd = unsafe {
-        libc::openat(
-            dir.as_raw_fd(),
-            name.as_ptr(),
-            flags | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK,
-            0o600,
-        )
-    };
-    if fd < 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    // SAFETY: the newly owned descriptor is transferred exactly once.
-    Ok(unsafe { File::from_raw_fd(fd) })
-}
 fn read_record(reader: &mut impl BufRead) -> Result<Option<(Vec<u8>, Entry)>, String> {
     let mut line = Vec::new();
     let bytes = reader
@@ -390,18 +325,6 @@ fn read_record(reader: &mut impl BufRead) -> Result<Option<(Vec<u8>, Entry)>, St
     }
     Ok(Some((line, record)))
 }
-struct Scratch<'a> {
-    dir: &'a File,
-    name: CString,
-}
-impl Drop for Scratch<'_> {
-    fn drop(&mut self) {
-        // SAFETY: live directory and NUL-terminated, private temporary filename.
-        unsafe {
-            libc::unlinkat(self.dir.as_raw_fd(), self.name.as_ptr(), 0);
-        }
-    }
-}
 fn replace_record(dir: &File, file: &mut File, entry: &Entry, bytes: &[u8]) -> Result<(), String> {
     let scratch = Scratch {
         dir,
@@ -420,20 +343,7 @@ fn replace_record(dir: &File, file: &mut File, entry: &Entry, bytes: &[u8]) -> R
             .write_all(if record.id == entry.id { bytes } else { &line })
             .map_err(|e| e.to_string())?;
     }
-    output.sync_all().map_err(|e| e.to_string())?;
-    // SAFETY: live directory and two NUL-terminated paths on the same filesystem.
-    if unsafe {
-        libc::renameat(
-            dir.as_raw_fd(),
-            scratch.name.as_ptr(),
-            dir.as_raw_fd(),
-            c"activity.jsonl".as_ptr(),
-        )
-    } != 0
-    {
-        return Err(std::io::Error::last_os_error().to_string());
-    }
-    dir.sync_all().map_err(|e| e.to_string())
+    scratch.replace(&output, c"activity.jsonl")
 }
 
 fn append_transaction(
@@ -454,18 +364,15 @@ fn append_transaction(
     Ok(())
 }
 
-pub(crate) fn check_owner(file: &File) -> Result<(), String> {
-    // SAFETY: geteuid takes no arguments and has no preconditions.
-    if file.metadata().map_err(|e| e.to_string())?.uid() != unsafe { libc::geteuid() } {
-        return Err("Activity history must be owned by the current user.".into());
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::{
+        fs::OpenOptions,
+        os::fd::AsRawFd,
+        path::PathBuf,
+        sync::atomic::{AtomicU64, Ordering},
+    };
     static NEXT: AtomicU64 = AtomicU64::new(0);
 
     struct Temp(PathBuf);
