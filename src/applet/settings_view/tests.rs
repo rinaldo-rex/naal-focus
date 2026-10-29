@@ -58,6 +58,41 @@ impl Operation for Measurements {
 }
 
 #[test]
+fn dropdown_labels_keep_their_values_and_order() {
+    assert_eq!(
+        CHART_STYLES.map(|c| (c.0, c.1)),
+        [
+            (ChartStyle::Heatmap, "Heatmap — hourly mentions"),
+            (ChartStyle::Treemap, "Treemap — daily mentions"),
+        ]
+    );
+    assert_eq!(
+        FOCUS_STYLES.map(|c| (c.0, c.1)),
+        [
+            (FocusStyle::Totals, "Time spent"),
+            (FocusStyle::Timeline, "Day timeline"),
+            (FocusStyle::Both, "Timeline + totals"),
+        ]
+    );
+    assert_eq!(
+        FOCUS_SIDES.map(|c| (c.0, c.1)),
+        [(FocusSide::Left, "Left"), (FocusSide::Right, "Right")]
+    );
+    assert_eq!(
+        BREATH_PACES.map(|c| (c.0, c.1)),
+        [
+            (Pace::Short, "3s in / 4s out"),
+            (Pace::Balanced, "4s in / 6s out"),
+            (Pace::Even, "5s in / 5s out"),
+        ]
+    );
+    assert_eq!(
+        BREATH_COUNTS.map(|c| (c.0, c.1)),
+        [(1, "One breath"), (2, "Two breaths")]
+    );
+}
+
+#[test]
 fn save_button_retains_corrupt_file_repair_and_validation() {
     let renderer = cosmic::Renderer::new(cosmic::font::default(), iced::Pixels(14.0));
     let size = Size::new(900.0, 552.0);
@@ -106,7 +141,9 @@ fn save_button_retains_corrupt_file_repair_and_validation() {
             );
         }
         assert_eq!(
-            messages.iter().any(|m| matches!(m, Message::Save)),
+            messages
+                .iter()
+                .any(|m| matches!(m, Message::Settings(SettingsMessage::Save))),
             can_save
         );
     }

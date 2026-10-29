@@ -67,6 +67,13 @@ pub enum Message {
     Snooze,
     Resume,
     SettingsPage(widget::nav_bar::Id),
+    Settings(SettingsMessage),
+    WindowFocus { id: Id, focused: bool },
+    Surface(cosmic::surface::Action<Message>),
+}
+
+#[derive(Debug, Clone)]
+pub enum SettingsMessage {
     IntervalMinutes(String),
     IntervalSeconds(String),
     Duration(String),
@@ -76,23 +83,21 @@ pub enum Message {
     TextSize(String),
     IdleMinutes(String),
     IdleSeconds(String),
-    ChartStyle(usize),
+    ChartStyle(ChartStyle),
     ChartProjects(bool),
     ChartFeelings(bool),
     ChartTags(bool),
     FocusEnabled(bool),
-    FocusStyle(usize),
-    FocusSide(usize),
+    FocusStyle(FocusStyle),
+    FocusSide(FocusSide),
     Focus24Hour(bool),
     BreathingEnabled(bool),
     BreathingReducedMotion(bool),
-    BreathingPace(usize),
-    BreathingCycles(usize),
+    BreathingPace(crate::breathing::Pace),
+    BreathingCycles(u8),
     BreathingFamily(crate::breathing::Family, bool),
     Quotes(widget::text_editor::Action),
     Save,
-    WindowFocus { id: Id, focused: bool },
-    Surface(cosmic::surface::Action<Message>),
 }
 
 impl App {
@@ -375,9 +380,8 @@ impl cosmic::Application for App {
                     && !focused
                     && self.core.main_window_id() == Some(id)
                     && self.form.dirty
-                    && let Ok(settings) = self.form.save(&self.status.settings)
                 {
-                    self.engine.request(Request::Settings(settings));
+                    return self.update(Message::Settings(SettingsMessage::Save));
                 }
             }
             Message::Enabled(enabled) => {
@@ -408,115 +412,8 @@ impl cosmic::Application for App {
                     },
                 );
             }
-            Message::IntervalMinutes(text) => {
-                self.form.interval.minutes = text;
-                self.form.dirty = true;
-            }
-            Message::IntervalSeconds(text) => {
-                self.form.interval.seconds = text;
-                self.form.dirty = true;
-            }
-            Message::Duration(text) => {
-                self.form.duration = text;
-                self.form.dirty = true;
-            }
-            Message::ReflectionsEnabled(enabled) => {
-                self.form.reflections_enabled = enabled;
-                self.form.dirty = true;
-            }
-            Message::TypingMinutes(text) => {
-                self.form.typing_limit.minutes = text;
-                self.form.dirty = true;
-            }
-            Message::TypingSeconds(text) => {
-                self.form.typing_limit.seconds = text;
-                self.form.dirty = true;
-            }
-            Message::TextSize(text) => {
-                self.form.text_size = text;
-                self.form.dirty = true;
-            }
-            Message::IdleMinutes(text) => {
-                self.form.idle_secs.minutes = text;
-                self.form.dirty = true;
-            }
-            Message::IdleSeconds(text) => {
-                self.form.idle_secs.seconds = text;
-                self.form.dirty = true;
-            }
-            Message::ChartStyle(index) => {
-                if let Some(style) = [ChartStyle::Heatmap, ChartStyle::Treemap].get(index) {
-                    self.form.charts.style = *style;
-                    self.form.dirty = true;
-                }
-            }
-            Message::ChartProjects(enabled) => {
-                self.form.charts.projects = enabled;
-                self.form.dirty = true;
-            }
-            Message::ChartFeelings(enabled) => {
-                self.form.charts.feelings = enabled;
-                self.form.dirty = true;
-            }
-            Message::ChartTags(enabled) => {
-                self.form.charts.tags = enabled;
-                self.form.dirty = true;
-            }
-            Message::FocusEnabled(enabled) => {
-                self.form.focus.enabled = enabled;
-                self.form.dirty = true;
-            }
-            Message::FocusStyle(index) => {
-                if let Some(style) =
-                    [FocusStyle::Totals, FocusStyle::Timeline, FocusStyle::Both].get(index)
-                {
-                    self.form.focus.style = *style;
-                    self.form.dirty = true;
-                }
-            }
-            Message::FocusSide(index) => {
-                if let Some(side) = [FocusSide::Left, FocusSide::Right].get(index) {
-                    self.form.focus.side = *side;
-                    self.form.dirty = true;
-                }
-            }
-            Message::Focus24Hour(enabled) => {
-                self.form.focus.use_24_hour_time = enabled;
-                self.form.dirty = true;
-            }
-            Message::BreathingEnabled(enabled) => {
-                self.form.breathing.enabled = enabled;
-                self.form.dirty = true;
-            }
-            Message::BreathingReducedMotion(enabled) => {
-                self.form.breathing.reduced_motion = enabled;
-                self.form.dirty = true;
-            }
-            Message::BreathingPace(index) => {
-                if let Some(pace) = crate::breathing::Pace::ALL.get(index) {
-                    self.form.breathing.pace = *pace;
-                    self.form.dirty = true;
-                }
-            }
-            Message::BreathingCycles(index) => {
-                if index < 2 {
-                    self.form.breathing.cycles = index as u8 + 1;
-                    self.form.dirty = true;
-                }
-            }
-            Message::BreathingFamily(family, enabled) => {
-                self.form.breathing.families.retain(|f| *f != family);
-                if enabled {
-                    self.form.breathing.families.push(family);
-                }
-                self.form.dirty = true;
-            }
-            Message::Quotes(action) => {
-                self.form.dirty |= action.is_edit();
-                self.form.quotes.perform(action);
-            }
-            Message::Save => {
-                if let Ok(settings) = self.form.save(&self.status.settings) {
+            Message::Settings(message) => {
+                if let Some(settings) = self.form.update(message, &self.status.settings) {
                     self.engine.request(Request::Settings(settings));
                 }
             }

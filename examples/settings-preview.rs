@@ -4,7 +4,10 @@ use cosmic::{
     iced::{self, Size},
 };
 use engine::Status;
-use naal_focus::{applet::Message, breathing, config, engine};
+use naal_focus::{
+    applet::{Message, SettingsMessage},
+    breathing, config, engine,
+};
 
 // Render the production form without starting a supervisor or reading user data.
 #[allow(dead_code)]
