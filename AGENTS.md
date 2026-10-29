@@ -12,6 +12,13 @@
 # Generic
 
 - When discussing options with the user - Give a brief, and use an example wherever possible to show them the tradeoffs.
+- Install updates with `just install` during development when a feature is completed and confirmed by the user. For reloading the applet after installing please ask the user and don't bother trying to do it yourself unless explicitly asked by the user. 
+
+## Documentation
+
+- Treat docs/html/index.html as the go-to source of truth for app behavior and UI intent. Read it before changes, and update it and relevant screenshots
+   alongside implementation.
+- Don't add documentation where code is self-explanatory. Rule of thumb: Your code should be clean enough to self-explain what it is doing, and the code comments (if required) should explain _why_ you're doing it in certain ways. The HTML documentation is user-facing, so keep it brief, and explain the feature in layman terms only. 
 
 ### Generic UI/UX guidelines
 
