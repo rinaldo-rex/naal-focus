@@ -133,6 +133,15 @@ pub fn numeric_field_error(value: &str, range: RangeInclusive<u64>) -> Option<St
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) enum CloseState {
+    #[default]
+    Open,
+    Confirm,
+    Saving,
+    Ready,
+}
+
 pub(super) struct SettingsForm {
     pub interval: TimeInput,
     pub duration: String,
@@ -146,6 +155,7 @@ pub(super) struct SettingsForm {
     pub quotes: widget::text_editor::Content<cosmic::Renderer>,
     pub error: Option<String>,
     pub dirty: bool,
+    pub close: CloseState,
     pending_save: Option<Settings>,
 }
 
@@ -166,12 +176,42 @@ impl SettingsForm {
             )),
             error: None,
             dirty: false,
+            close: CloseState::Open,
             pending_save: None,
         }
     }
 
     pub fn update(&mut self, message: SettingsMessage, settings: &Settings) -> Option<Settings> {
         match message {
+            SettingsMessage::RequestClose => {
+                if self.close == CloseState::Open {
+                    self.close =
+                        if self.dirty && self.candidate(settings).as_ref().ok() != Some(settings) {
+                            CloseState::Confirm
+                        } else {
+                            CloseState::Ready
+                        };
+                }
+                return None;
+            }
+            SettingsMessage::KeepEditing => {
+                self.close = CloseState::Open;
+                return None;
+            }
+            SettingsMessage::Discard => {
+                if self.close == CloseState::Confirm {
+                    self.close = CloseState::Ready;
+                }
+                return None;
+            }
+            SettingsMessage::SaveAndClose => {
+                if self.close != CloseState::Confirm {
+                    return None;
+                }
+                let saved = self.save(settings).ok()?;
+                self.close = CloseState::Saving;
+                return Some(saved);
+            }
             SettingsMessage::IntervalMinutes(text) => self.interval.minutes = text,
             SettingsMessage::IntervalSeconds(text) => self.interval.seconds = text,
             SettingsMessage::Duration(text) => self.duration = text,
@@ -222,7 +262,17 @@ impl SettingsForm {
             self.pending_save = None;
             // Typing after Save must not be erased by its later acknowledgment.
             self.dirty = self.candidate(settings).as_ref().ok() != Some(settings);
+            if matches!(self.close, CloseState::Confirm | CloseState::Saving) {
+                self.close = if self.dirty {
+                    CloseState::Confirm
+                } else {
+                    CloseState::Ready
+                };
+            }
             return true;
+        }
+        if error.is_some() && self.close == CloseState::Saving {
+            self.close = CloseState::Confirm;
         }
         if !self.dirty {
             // Avoid rebuilding the editor and losing its cursor on every tick.
@@ -231,6 +281,11 @@ impl SettingsForm {
             }
         }
         false
+    }
+
+    pub fn can_auto_save(&self) -> bool {
+        // Losing focus at the close prompt must not bypass the Discard choice.
+        self.dirty && self.close == CloseState::Open
     }
 
     pub fn save(&mut self, settings: &Settings) -> Result<Settings, String> {
@@ -284,6 +339,132 @@ impl SettingsForm {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn close_is_immediate_only_for_unchanged_settings() {
+        let original = Settings::default();
+        let mut form = SettingsForm::new(&original);
+        assert!(
+            form.update(SettingsMessage::RequestClose, &original)
+                .is_none()
+        );
+        assert_eq!(form.close, CloseState::Ready);
+        let mut form = SettingsForm::new(&original);
+        form.update(SettingsMessage::IntervalMinutes("6".into()), &original);
+        form.update(SettingsMessage::IntervalMinutes("5".into()), &original);
+        form.update(SettingsMessage::RequestClose, &original);
+        assert_eq!(form.close, CloseState::Ready);
+        assert!(form.pending_save.is_none());
+    }
+
+    #[test]
+    fn close_warning_blocks_auto_save_and_keep_editing_preserves_the_draft() {
+        let original = Settings::default();
+        let mut form = SettingsForm::new(&original);
+        form.update(SettingsMessage::IntervalMinutes("6".into()), &original);
+        assert!(form.can_auto_save());
+        assert!(
+            form.update(SettingsMessage::RequestClose, &original)
+                .is_none()
+        );
+        assert_eq!(form.close, CloseState::Confirm);
+        assert!(!form.can_auto_save());
+        assert!(form.pending_save.is_none());
+        form.update(SettingsMessage::KeepEditing, &original);
+        assert_eq!(form.close, CloseState::Open);
+        assert!(form.can_auto_save());
+        assert_eq!(form.interval, TimeInput::new(360));
+    }
+
+    #[test]
+    fn discard_closes_without_submitting_even_an_invalid_draft() {
+        let original = Settings::default();
+        let mut form = SettingsForm::new(&original);
+        form.update(SettingsMessage::TextSize("invalid".into()), &original);
+        form.update(SettingsMessage::RequestClose, &original);
+        assert_eq!(form.close, CloseState::Confirm);
+        assert!(form.update(SettingsMessage::Discard, &original).is_none());
+        assert_eq!(form.close, CloseState::Ready);
+        assert!(form.pending_save.is_none());
+    }
+
+    #[test]
+    fn save_and_close_waits_for_acknowledgment_and_recovers_from_failure() {
+        let original = Settings::default();
+        let mut form = SettingsForm::new(&original);
+        form.update(SettingsMessage::IntervalMinutes("6".into()), &original);
+        form.update(SettingsMessage::RequestClose, &original);
+        let saved = form
+            .update(SettingsMessage::SaveAndClose, &original)
+            .unwrap();
+        assert_eq!(form.close, CloseState::Saving);
+        assert!(!form.can_auto_save());
+        assert!(
+            form.update(SettingsMessage::SaveAndClose, &original)
+                .is_none()
+        );
+        assert!(!form.sync(&original, None));
+        assert_eq!(form.close, CloseState::Saving);
+        assert!(!form.sync(&original, Some("Cannot save settings")));
+        assert_eq!(form.close, CloseState::Confirm);
+        assert!(form.dirty);
+        assert_eq!(form.interval, TimeInput::new(360));
+        assert_eq!(
+            form.update(SettingsMessage::SaveAndClose, &original),
+            Some(saved.clone())
+        );
+        assert!(form.sync(&saved, None));
+        assert_eq!(form.close, CloseState::Ready);
+        assert!(!form.dirty);
+    }
+
+    #[test]
+    fn invalid_save_and_close_keeps_the_warning_and_draft() {
+        let original = Settings::default();
+        let mut form = SettingsForm::new(&original);
+        form.update(SettingsMessage::TextSize("invalid".into()), &original);
+        form.update(SettingsMessage::RequestClose, &original);
+        assert!(
+            form.update(SettingsMessage::SaveAndClose, &original)
+                .is_none()
+        );
+        assert_eq!(form.close, CloseState::Confirm);
+        assert!(form.pending_save.is_none());
+        assert_eq!(form.text_size, "invalid");
+        assert_eq!(form.error.as_deref(), Some("Text size needs an integer."));
+    }
+
+    #[test]
+    fn keep_editing_cancels_a_pending_close_but_not_an_explicit_save() {
+        let original = Settings::default();
+        let mut form = SettingsForm::new(&original);
+        form.update(SettingsMessage::IntervalMinutes("6".into()), &original);
+        form.update(SettingsMessage::RequestClose, &original);
+        let saved = form
+            .update(SettingsMessage::SaveAndClose, &original)
+            .unwrap();
+        form.update(SettingsMessage::KeepEditing, &original);
+        assert_eq!(form.close, CloseState::Open);
+        assert!(form.sync(&saved, None));
+        assert_eq!(form.close, CloseState::Open);
+        assert!(!form.dirty);
+    }
+
+    #[test]
+    fn edits_after_save_and_close_require_another_confirmation() {
+        let original = Settings::default();
+        let mut form = SettingsForm::new(&original);
+        form.update(SettingsMessage::IntervalMinutes("6".into()), &original);
+        form.update(SettingsMessage::RequestClose, &original);
+        let saved = form
+            .update(SettingsMessage::SaveAndClose, &original)
+            .unwrap();
+        form.update(SettingsMessage::IntervalSeconds("1".into()), &original);
+        assert!(form.sync(&saved, None));
+        assert_eq!(form.close, CloseState::Confirm);
+        assert!(form.dirty);
+        assert_eq!(form.interval, TimeInput::new(361));
+    }
 
     #[test]
     fn field_messages_edit_only_the_draft_and_save_through_one_handler() {

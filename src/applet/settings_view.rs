@@ -1,6 +1,6 @@
 use super::{
     Message, SettingsMessage,
-    settings::{Navigation, Page, SettingsForm, TimeInput},
+    settings::{CloseState, Navigation, Page, SettingsForm, TimeInput},
 };
 use crate::{
     breathing::{Family, Pace},
@@ -97,6 +97,37 @@ pub(super) fn view<'a>(
     ]
     .height(Length::Fill)
     .into()
+}
+
+pub(super) fn close_dialog<'a>(
+    form: &'a SettingsForm,
+    status: &'a Status,
+) -> Option<Element<'a, SettingsMessage>> {
+    if !matches!(form.close, CloseState::Confirm | CloseState::Saving) {
+        return None;
+    }
+    let saving = form.close == CloseState::Saving;
+    let validation = form.validation_error(&status.settings);
+    let mut dialog = widget::dialog()
+        .title(if saving {
+            "Saving settings…"
+        } else {
+            "Save changes before closing?"
+        })
+        .primary_action(widget::button::suggested("Save & close").on_press_maybe(
+            (!saving && validation.is_none()).then_some(SettingsMessage::SaveAndClose),
+        ))
+        .secondary_action(
+            widget::button::destructive("Discard")
+                .on_press_maybe((!saving).then_some(SettingsMessage::Discard)),
+        )
+        .tertiary_action(
+            widget::button::standard("Keep editing").on_press(SettingsMessage::KeepEditing),
+        );
+    if let Some(error) = validation.as_deref().or(status.error.as_deref()) {
+        dialog = dialog.body(error.to_owned());
+    }
+    Some(dialog.into())
 }
 
 pub(super) fn page_scroll_id() -> cosmic::iced::advanced::widget::Id {

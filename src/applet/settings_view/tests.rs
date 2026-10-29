@@ -26,6 +26,8 @@ struct Measurements {
     scrolls: Vec<(Rectangle, Rectangle)>,
     footer: Option<Rectangle>,
     save: Option<Rectangle>,
+    close_buttons: Vec<(&'static str, Rectangle)>,
+    texts: Vec<String>,
 }
 
 impl Operation for Measurements {
@@ -40,8 +42,14 @@ impl Operation for Measurements {
     }
 
     fn text(&mut self, _: Option<&Id>, bounds: Rectangle, text: &str) {
+        self.texts.push(text.to_owned());
         if text == "Save settings" {
             self.save = Some(bounds);
+        }
+        for label in ["Save & close", "Discard", "Keep editing"] {
+            if text == label {
+                self.close_buttons.push((label, bounds));
+            }
         }
     }
 
@@ -54,6 +62,100 @@ impl Operation for Measurements {
         _: &mut dyn Scrollable,
     ) {
         self.scrolls.push((bounds, content));
+    }
+}
+
+#[test]
+fn close_dialog_buttons_respect_validation_and_in_flight_saves() {
+    let renderer = cosmic::Renderer::new(cosmic::font::default(), iced::Pixels(14.0));
+    let size = Size::new(760.0, 432.0);
+    for mode in 0..3 {
+        for label in ["Save & close", "Discard", "Keep editing"] {
+            let status = demo_status();
+            let mut form = SettingsForm::new(&status.settings);
+            assert!(close_dialog(&form, &status).is_none());
+            form.update(
+                SettingsMessage::IntervalMinutes("6".into()),
+                &status.settings,
+            );
+            if mode == 1 {
+                form.update(
+                    SettingsMessage::TextSize("invalid".into()),
+                    &status.settings,
+                );
+            }
+            form.update(SettingsMessage::RequestClose, &status.settings);
+            if mode == 2 {
+                form.update(SettingsMessage::SaveAndClose, &status.settings)
+                    .unwrap();
+            }
+            let mut element = close_dialog(&form, &status).unwrap();
+            let mut tree = Tree::new(&element);
+            let node = element.as_widget_mut().layout(
+                &mut tree,
+                &renderer,
+                &layout::Limits::new(Size::ZERO, size),
+            );
+            assert!(node.size().width <= size.width && node.size().height <= size.height);
+            let mut measurements = Measurements::default();
+            element.as_widget_mut().operate(
+                &mut tree,
+                Layout::new(&node),
+                &renderer,
+                &mut measurements,
+            );
+            if mode == 1 {
+                assert!(
+                    measurements
+                        .texts
+                        .iter()
+                        .any(|text| text == "Text size needs an integer.")
+                );
+            }
+            let position = measurements
+                .close_buttons
+                .iter()
+                .find(|(name, _)| *name == label)
+                .unwrap()
+                .1
+                .center();
+            let mut messages = Vec::new();
+            for event in [
+                iced::mouse::Event::ButtonPressed(iced::mouse::Button::Left),
+                iced::mouse::Event::ButtonReleased(iced::mouse::Button::Left),
+            ] {
+                element.as_widget_mut().update(
+                    &mut tree,
+                    &iced::Event::Mouse(event),
+                    Layout::new(&node),
+                    iced::mouse::Cursor::Available(position),
+                    &renderer,
+                    &mut iced::advanced::clipboard::Null,
+                    &mut iced::advanced::Shell::new(&mut messages),
+                    &Rectangle::with_size(size),
+                );
+            }
+            match label {
+                "Save & close" => assert_eq!(
+                    messages
+                        .iter()
+                        .any(|m| matches!(m, SettingsMessage::SaveAndClose)),
+                    mode == 0
+                ),
+                "Discard" => assert_eq!(
+                    messages
+                        .iter()
+                        .any(|m| matches!(m, SettingsMessage::Discard)),
+                    mode != 2
+                ),
+                "Keep editing" => assert!(
+                    messages
+                        .iter()
+                        .any(|m| matches!(m, SettingsMessage::KeepEditing))
+                ),
+                _ => unreachable!(),
+            }
+        }
     }
 }
 

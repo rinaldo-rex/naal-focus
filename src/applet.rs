@@ -21,7 +21,7 @@ mod settings;
 mod settings_view;
 pub use launch::run_settings;
 use launch::settings_command;
-use settings::{Navigation, SettingsForm};
+use settings::{CloseState, Navigation, SettingsForm};
 
 #[derive(Clone, Copy, Default)]
 pub struct Flags {
@@ -60,6 +60,8 @@ pub enum Message {
     SettingsToken(Option<String>),
     SettingsLaunched(Result<(), String>),
     SettingsOpened(Id),
+    SettingsCloseRequested(Id),
+    SettingsClosed(Id),
     PopupClosed(Id),
     Tick,
     Enabled(bool),
@@ -98,6 +100,10 @@ pub enum SettingsMessage {
     BreathingFamily(crate::breathing::Family, bool),
     Quotes(widget::text_editor::Action),
     Save,
+    RequestClose,
+    SaveAndClose,
+    Discard,
+    KeepEditing,
 }
 
 impl App {
@@ -205,8 +211,28 @@ impl cosmic::Application for App {
         };
         (app, task)
     }
+    fn on_app_exit(&mut self) -> Option<Message> {
+        self.standalone
+            .then_some(Message::Settings(SettingsMessage::RequestClose))
+    }
+    fn dialog(&self) -> Option<Element<'_, Message>> {
+        if self.standalone {
+            settings_view::close_dialog(&self.form, &self.status)
+                .map(|dialog| dialog.map(Message::Settings))
+        } else {
+            None
+        }
+    }
+    fn on_escape(&mut self) -> Task<cosmic::Action<Message>> {
+        if self.standalone && matches!(self.form.close, CloseState::Confirm | CloseState::Saving) {
+            return self.update(Message::Settings(SettingsMessage::KeepEditing));
+        }
+        Task::none()
+    }
     fn on_close_requested(&self, id: Id) -> Option<Message> {
-        if self.popup == Some(id) {
+        if self.standalone && self.core.main_window_id() == Some(id) {
+            Some(Message::SettingsClosed(id))
+        } else if self.popup == Some(id) {
             Some(Message::PopupClosed(id))
         } else {
             None
@@ -277,6 +303,9 @@ impl cosmic::Application for App {
                     self.saved_at = None;
                 }
                 self.sync_status(self.engine.status());
+                if self.standalone && self.form.close == CloseState::Ready {
+                    return iced::exit();
+                }
                 // Generation and opening run on the dashboard worker; this
                 // loop only polls its result without ever blocking on I/O.
                 if let Some(result) = self.pending_dashboard.as_mut().and_then(|p| p.poll()) {
@@ -372,6 +401,16 @@ impl cosmic::Application for App {
                     return activation::activate(id, token);
                 }
             }
+            Message::SettingsCloseRequested(id) => {
+                if self.standalone && self.core.main_window_id() == Some(id) {
+                    return self.update(Message::Settings(SettingsMessage::RequestClose));
+                }
+            }
+            Message::SettingsClosed(id) => {
+                if self.standalone && self.core.main_window_id() == Some(id) {
+                    return iced::exit();
+                }
+            }
             Message::WindowFocus { id, focused } => {
                 // Leaving the settings window is the commit point for drafting:
                 // an entirely valid draft saves itself here; an invalid draft
@@ -379,7 +418,7 @@ impl cosmic::Application for App {
                 if self.standalone
                     && !focused
                     && self.core.main_window_id() == Some(id)
-                    && self.form.dirty
+                    && self.form.can_auto_save()
                 {
                     return self.update(Message::Settings(SettingsMessage::Save));
                 }
@@ -415,6 +454,9 @@ impl cosmic::Application for App {
             Message::Settings(message) => {
                 if let Some(settings) = self.form.update(message, &self.status.settings) {
                     self.engine.request(Request::Settings(settings));
+                }
+                if self.standalone && self.form.close == CloseState::Ready {
+                    return iced::exit();
                 }
             }
             Message::TogglePopup => {
@@ -458,10 +500,14 @@ impl cosmic::Application for App {
 }
 
 fn settings_window_message((id, event): (Id, iced::window::Event)) -> Message {
-    Message::WindowFocus {
-        id,
+    match event {
+        iced::window::Event::CloseRequested => Message::SettingsCloseRequested(id),
+        iced::window::Event::Closed => Message::SettingsClosed(id),
         // Only a real focus loss commits a draft, not resizing or moving it.
-        focused: !matches!(event, iced::window::Event::Unfocused),
+        _ => Message::WindowFocus {
+            id,
+            focused: !matches!(event, iced::window::Event::Unfocused),
+        },
     }
 }
 
@@ -486,6 +532,19 @@ fn resume_request(status: &Status) -> Option<Request> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn compositor_close_requests_are_handled_before_window_teardown() {
+        let id = Id::unique();
+        assert!(matches!(
+            settings_window_message((id, iced::window::Event::CloseRequested)),
+            Message::SettingsCloseRequested(window) if window == id
+        ));
+        assert!(matches!(
+            settings_window_message((id, iced::window::Event::Closed)),
+            Message::SettingsClosed(window) if window == id
+        ));
+    }
+
     #[test]
     fn only_real_focus_loss_can_trigger_an_implicit_save() {
         let id = Id::unique();
