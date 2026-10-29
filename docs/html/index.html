@@ -1,0 +1,261 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="The canonical visual reference for Naal Focus: its purpose, screens, and controls.">
+  <title>Naal Focus — App guide</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --paper: #f6f5f0;
+      --ink: #252c29;
+      --muted: #66716a;
+      --line: #dcded5;
+      --accent: #35634c;
+      --panel: #eeefe8;
+    }
+    * { box-sizing: border-box; }
+    html { scroll-padding-top: 28px; }
+    body {
+      margin: 0 auto;
+      max-width: 1440px;
+      padding: 44px 40px 72px;
+      display: grid;
+      grid-template-columns: 180px minmax(0, 1fr);
+      gap: 64px;
+      background: var(--paper);
+      color: var(--ink);
+      font: 15px/1.6 system-ui, sans-serif;
+    }
+    a { color: var(--accent); text-underline-offset: 4px; }
+    a:hover { text-decoration-thickness: 2px; }
+    a:focus-visible, summary:focus-visible { outline: 3px solid var(--accent); outline-offset: 5px; }
+    .skip { position: fixed; left: 24px; top: -100px; padding: 10px 16px; background: white; z-index: 2; }
+    .skip:focus { top: 16px; }
+    aside { align-self: start; position: sticky; top: 36px; }
+    .brand { font-size: 19px; font-weight: 700; letter-spacing: -.5px; text-decoration: none; color: var(--ink); }
+    .doc-label { margin: 6px 0 34px; font-size: 12px; color: var(--muted); }
+    nav { display: grid; gap: 14px; }
+    nav a { display: flex; gap: 12px; align-items: baseline; text-decoration: none; color: var(--muted); font-size: 13px; }
+    nav a:hover { color: var(--accent); }
+    nav span, .number { color: var(--accent); font: 11px/1.6 ui-monospace, monospace; }
+    header { margin-bottom: 54px; }
+    .eyebrow { margin: 0 0 12px; font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
+    h1 { margin: 0 0 14px; font-size: clamp(32px, 3.2vw, 46px); line-height: 1.15; letter-spacing: -1.5px; font-weight: 650; }
+    .intro { max-width: 670px; font-size: 19px; line-height: 1.55; margin: 0; }
+    .defaults { margin: 18px 0 0; color: var(--muted); font-size: 13px; }
+    section { border-top: 1px solid var(--line); padding-top: 26px; margin-top: 52px; }
+    .section-title { display: flex; align-items: baseline; gap: 15px; margin-bottom: 20px; }
+    h2 { margin: 0; font-size: 24px; line-height: 1.3; letter-spacing: -.6px; font-weight: 620; }
+    h3 { margin: 0 0 10px; font-size: 15px; line-height: 1.4; font-weight: 650; }
+    p { margin: 0 0 14px; }
+    .brief { color: var(--muted); font-size: 13px; }
+    .applet-layout { display: grid; grid-template-columns: 360px minmax(0, 1fr); gap: 36px; align-items: start; }
+    figure { min-width: 0; margin: 0; }
+    .shot { display: block; border: 1px solid #343a36; border-radius: 10px; overflow: hidden; background: #14171b; }
+    .shot img { display: block; width: 100%; height: auto; }
+    figcaption { margin-top: 9px; font-size: 12px; color: var(--muted); }
+    dl { margin: 0; }
+    .controls { display: grid; grid-template-columns: 145px minmax(0, 1fr); gap: 10px 18px; font-size: 13px; }
+    dt { font-weight: 650; }
+    dd { margin: 0; color: var(--muted); }
+    .stack dt { margin-bottom: 2px; }
+    .stack dd { margin-bottom: 13px; font-size: 13px; }
+    .two { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; }
+    .three { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 22px; }
+    .screen-card h3 { margin: 15px 0 6px; }
+    .screen-card p { font-size: 13px; color: var(--muted); }
+    .legend { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px 26px; margin-top: 24px; }
+    .legend dt { font-size: 13px; }
+    .legend dd { font-size: 13px; }
+    .keys { padding: 13px 16px; margin: 18px 0 0; background: var(--panel); border-radius: 8px; font-size: 12px; line-height: 1.9; }
+    kbd { font: inherit; font-weight: 650; }
+    code { font: .9em ui-monospace, monospace; overflow-wrap: anywhere; }
+    .setting-card img { border-radius: 9px; }
+    .setting-card dl { margin-top: 17px; }
+    .setting-card dt { font-size: 13px; }
+    .setting-card dd { font-size: 12px; margin-bottom: 13px; }
+    .save-note { margin-top: 20px; padding-left: 14px; border-left: 2px solid var(--accent); font-size: 13px; }
+    .dashboard-grid { margin-top: 26px; }
+    .dashboard-grid .shot { aspect-ratio: 16 / 10; }
+    .dashboard-grid img { height: 100%; object-fit: contain; object-position: top; }
+    .privacy { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; }
+    .privacy p { font-size: 13px; }
+    footer { border-top: 1px solid var(--line); margin-top: 42px; padding-top: 22px; color: var(--muted); font-size: 12px; }
+    summary { width: fit-content; cursor: pointer; color: var(--accent); }
+    details p { margin: 14px 0 0; max-width: 780px; }
+    @media (max-width: 1150px) {
+      body { grid-template-columns: 150px minmax(0, 1fr); gap: 32px; padding: 32px 24px 60px; }
+      .applet-layout { grid-template-columns: 320px minmax(0, 1fr); gap: 24px; }
+      .controls { grid-template-columns: 1fr; gap: 2px; }
+      .controls dd { margin-bottom: 8px; }
+    }
+    @media (max-width: 1000px) {
+      body { display: block; max-width: 900px; }
+      aside { position: static; margin-bottom: 36px; }
+      .doc-label { margin-bottom: 18px; }
+      nav { display: flex; flex-wrap: wrap; gap: 12px 22px; }
+    }
+    @media print {
+      body { display: block; padding: 0; background: white; font-size: 11px; }
+      aside, .skip { display: none; }
+      header { margin-bottom: 24px; }
+      section { margin-top: 28px; break-inside: avoid; }
+      .shot { border-color: #555; }
+      footer details { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <a class="skip" href="#main">Skip to guide</a>
+  <aside>
+    <a class="brand" href="#main">Naal Focus</a>
+    <p class="doc-label">App guide · Current behavior</p>
+    <nav aria-label="Guide sections">
+      <a href="#applet"><span>01</span> Applet</a>
+      <a href="#reminder"><span>02</span> Reminder</a>
+      <a href="#reflection"><span>03</span> Reflection &amp; context</a>
+      <a href="#settings"><span>04</span> Settings</a>
+      <a href="#dashboard"><span>05</span> Dashboard</a>
+      <a href="#privacy"><span>06</span> Privacy &amp; boundaries</a>
+    </nav>
+  </aside>
+  <main id="main">
+    <header>
+      <p class="eyebrow">Canonical product &amp; UI reference</p>
+      <h1>What Naal Focus does</h1>
+      <p class="intro">A COSMIC desktop applet that periodically dims every monitor so you can breathe, notice your attention, and optionally write a private reflection.</p>
+      <p class="defaults">Starts paused. Default timing: every 5 minutes → 14-second breathing entrance → 5-second reflection.</p>
+    </header>
+
+    <section id="applet" aria-labelledby="applet-title">
+      <div class="section-title"><span class="number">01</span><h2 id="applet-title">Applet</h2></div>
+      <div class="applet-layout">
+        <figure>
+          <a class="shot" href="screenshots/applet.png" target="_blank" rel="noopener"><img src="screenshots/applet.png" width="360" height="273" alt="Native applet controls: paused status, recurring reminders switch, Show now, Snooze 15 min, Dashboard, and Settings."></a>
+          <figcaption>Panel/dock controls. All monitors share one timer.</figcaption>
+        </figure>
+        <dl class="controls">
+          <dt>Status</dt><dd>What the reminder timer is doing.</dd>
+          <dt>Recurring reminders</dt><dd>Turn scheduled reminders on or off.</dd>
+          <dt>Show now</dt><dd>One reminder after 2 seconds, even while paused. Safety checks still apply.</dd>
+          <dt>Snooze / Resume</dt><dd>Pause for 15 minutes, or end the snooze early.</dd>
+          <dt>Dashboard…</dt><dd>Review saved reflections in your browser.</dd>
+          <dt>Settings…</dt><dd>Open the separate preferences window.</dd>
+        </dl>
+      </div>
+    </section>
+
+    <section id="reminder" aria-labelledby="reminder-title">
+      <div class="section-title"><span class="number">02</span><h2 id="reminder-title">Reminder</h2></div>
+      <div class="two">
+        <figure class="screen-card" id="breathing">
+          <a class="shot" href="screenshots/breathing.png" target="_blank" rel="noopener"><img src="screenshots/breathing.png" width="1920" height="1080" alt="Native breathing entrance with a radial lattice and timed inhale cue."></a>
+          <h3>Breathe first</h3>
+          <p>Geometry and breath cues give you a quiet transition. Every monitor shares the same breath.</p>
+        </figure>
+        <figure class="screen-card" id="basic-reminder">
+          <a class="shot" href="screenshots/reminder.png" target="_blank" rel="noopener"><img src="screenshots/reminder.png" width="1920" height="1080" alt="Default reflection screen: a central quote and an empty reflection field, without optional charts or focus history."></a>
+          <h3>Notice, then return</h3>
+          <p>The quote prompts awareness. Writing is optional; doing nothing lets the reminder close automatically.</p>
+        </figure>
+      </div>
+      <p class="brief">The reminder takes keyboard focus. <kbd>Esc</kbd> dismisses it when no draft or suggestions are active; background clicks do nothing.</p>
+    </section>
+
+    <section id="reflection" aria-labelledby="reflection-title">
+      <div class="section-title"><span class="number">03</span><h2 id="reflection-title">Reflection &amp; context</h2></div>
+      <figure>
+        <a class="shot" href="screenshots/reflection.png" target="_blank" rel="noopener"><img src="screenshots/reflection.png" width="1920" height="1080" alt="Reflection screen with a quote, optional project/feeling/tag heatmaps, three previous reflections, metadata pills, a draft and time underline, and a right-hand window-time sidebar."></a>
+        <figcaption>Demo history; optional charts and focus tracking enabled. Both start off. <a href="screenshots/reflection-treemap.png" target="_blank" rel="noopener">Treemap variant ↗</a></figcaption>
+      </figure>
+      <div class="legend">
+        <dl><dt>Quote</dt><dd>The awareness prompt, not a task or instruction to log something.</dd></dl>
+        <dl><dt>Charts</dt><dd>Today’s saved mentions. Heatmap = hourly counts; treemap = daily totals. Not time spent.</dd></dl>
+        <dl><dt>Focus sidebar</dt><dd>Today’s foreground apps, window titles, and recorded time. Opt-in; not proof of attention.</dd></dl>
+        <dl><dt>Faded history</dt><dd>Today’s earlier reflections; consecutive repeats group together. Arrow keys browse without replacing your draft.</dd></dl>
+        <dl><dt>Metadata pills</dt><dd>Explicit <code>#tags</code>, <code>@projects</code>, and <code>??feelings</code> from your text. Nothing inferred.</dd></dl>
+        <dl><dt>Reflection field &amp; underline</dt><dd>Type without clicking. Writing holds the normal countdown; the underline shows the fixed typing allowance.</dd></dl>
+      </div>
+      <p class="keys"><kbd>Enter</kbd> saves; <kbd>Enter again</kbd> reopens for correction. In history, <kbd>Enter</kbd> copies, then <kbd>Enter</kbd> saves a new moment.<br><kbd>↑ / ↓</kbd> select suggestions or browse history; <kbd>Tab</kbd> completes a suggestion. <kbd>Esc</kbd> closes suggestions, then cancels a draft or exits browsing, then dismisses.</p>
+    </section>
+
+    <section id="settings" aria-labelledby="settings-title">
+      <div class="section-title"><span class="number">04</span><h2 id="settings-title">Settings</h2></div>
+      <p class="brief">One scrollable window. Closing it leaves the applet running.</p>
+      <div class="three">
+        <article class="setting-card" id="settings-timing">
+          <a class="shot" href="screenshots/settings-timing.png" target="_blank" rel="noopener"><img src="screenshots/settings-timing.png" width="540" height="760" alt="Settings upper scroll position: reminder interval, reflection duration, idle threshold, text size, and breathing controls."></a>
+          <dl>
+            <dt>Timing</dt><dd>Interval between reminders, reflection duration after breathing, and the idle threshold.</dd>
+            <dt>Appearance</dt><dd>Quote text size.</dd>
+            <dt>Breathing entrance</dt><dd>On/off, reduced motion, pace, one or two breaths, and allowed pattern families. Keep at least one family.</dd>
+          </dl>
+        </article>
+        <article class="setting-card" id="settings-charts">
+          <a class="shot" href="screenshots/settings-charts.png" target="_blank" rel="noopener"><img src="screenshots/settings-charts.png" width="540" height="760" alt="Settings middle scroll position: four breathing pattern switches, chart style and categories, and focus-history controls."></a>
+          <dl>
+            <dt>Overlay charts</dt><dd>One chart style; independent Projects, Feelings, and Tags switches. All off hides charts.</dd>
+            <dt>Focus history</dt><dd>Opt into window-time tracking. Choose totals, timeline, or both; sidebar side; and 12/24-hour time.</dd>
+          </dl>
+        </article>
+        <article class="setting-card" id="settings-reflection">
+          <a class="shot" href="screenshots/settings-reflection.png" target="_blank" rel="noopener"><img src="screenshots/settings-reflection.png" width="540" height="760" alt="Settings lower scroll position: focus-history preferences, typing time limit, quotes editor, and Save settings button."></a>
+          <dl>
+            <dt>Typing time limit</dt><dd>A separate writing allowance: 2 minutes by default, adjustable from 30 seconds to 10 minutes.</dd>
+            <dt>Quotes</dt><dd>Your rotating prompts. Start each with <code>- </code>; following lines belong to that quote.</dd>
+            <dt>Save settings</dt><dd>Apply the draft together and restart the reminder interval.</dd>
+          </dl>
+        </article>
+      </div>
+      <p class="save-note">Current behavior: a valid draft also saves when this window loses focus. The applet’s recurring-reminders switch saves immediately.</p>
+    </section>
+
+    <section id="dashboard" aria-labelledby="dashboard-title">
+      <div class="section-title"><span class="number">05</span><h2 id="dashboard-title">Dashboard</h2></div>
+      <p class="brief">A local HTML snapshot of saved reflections, regenerated whenever opened from the applet. Not the window-time log.</p>
+      <div class="three dashboard-grid">
+        <figure class="screen-card" id="dashboard-overview">
+          <a class="shot" href="screenshots/dashboard-overview.png" target="_blank" rel="noopener"><img src="screenshots/dashboard-overview.png" width="1440" height="1029" alt="Dashboard Overview: yearly day map, weekly tag share, metadata counts, and reflection streak."></a>
+          <h3>Overview</h3><p>Patterns across days and weeks, plus tag, project, and feeling counts.</p>
+        </figure>
+        <figure class="screen-card" id="dashboard-day">
+          <a class="shot" href="screenshots/dashboard-day.png" target="_blank" rel="noopener"><img src="screenshots/dashboard-day.png" width="1440" height="605" alt="Dashboard Day: timestamped reflections and their metadata beside a 24-hour dial."></a>
+          <h3>Day</h3><p>Read reflections in order; the 24-hour dial places them at their saved times.</p>
+        </figure>
+        <figure class="screen-card" id="dashboard-month">
+          <a class="shot" href="screenshots/dashboard-month.png" target="_blank" rel="noopener"><img src="screenshots/dashboard-month.png" width="1440" height="665" alt="Dashboard Month: calendar days with reflection counts and tag-filter buttons."></a>
+          <h3>Month</h3><p>Find a day, filter by tags, and open its reflections.</p>
+        </figure>
+      </div>
+      <p class="brief"><strong>Download HTML</strong> saves a standalone offline copy. Screenshots above use fabricated demo entries.</p>
+    </section>
+
+    <section id="privacy" aria-labelledby="privacy-title">
+      <div class="section-title"><span class="number">06</span><h2 id="privacy-title">Privacy &amp; boundaries</h2></div>
+      <div class="privacy">
+        <div>
+          <h3>Private, optional history</h3>
+          <p>Only submitted reflections are stored in <code>~/.naal-focus/activity.jsonl</code>. No automatic draft saving, cloud, or accounts.</p>
+          <p>Opt-in window history lives in <code>~/.naal-focus/focus.json</code>; only today is retained. Titles can be sensitive.</p>
+        </div>
+        <div>
+          <h3>A reminder, not a lock or score</h3>
+          <p>Reminders are suppressed on idle, lock, or sleep. Window tracking has its own switch and continues while reminders are paused or snoozed.</p>
+          <p>No screenshots or raw keystroke history are recorded. Foreground-window time is not a measure of productivity.</p>
+        </div>
+      </div>
+    </section>
+
+    <footer>
+      <details>
+        <summary>About this reference</summary>
+        <p>This is the canonical reference for product purpose and UI intent, starting with current behavior. Proposals are not promises. Revise it alongside agreed behavior changes; keep explanations short and replace screenshots when the UI changes.</p>
+        <p>Baseline: app version 0.1.0, source revision <code>a47c6987</code>, captured 29 October 2026. Applet/settings images use the production native views in an isolated capture window (not a redesigned mockup). Reminder images are offscreen frames from the production renderer on a neutral background. Dashboard images use the production HTML generator with fabricated data. No personal history or unrelated desktop content is included. Images open at full size.</p>
+        <p>Technical detail: <a href="../../README.md">Setup &amp; use</a> · <a href="../REFERENCE.md">Behavior reference</a> · <a href="../ARCHITECTURE.md">Architecture</a> · <a href="../TESTING.md">Verification</a>. UI implementation: <a href="../../src/applet.rs">Applet &amp; settings</a> · <a href="../../src/render.rs">Reminder</a> · <a href="../../src/dashboard_page.html">Dashboard</a>.</p>
+      </details>
+    </footer>
+  </main>
+</body>
+</html>
