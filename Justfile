@@ -13,6 +13,16 @@ check:
     cargo test --locked --features applet
     bash -n scripts/install.sh scripts/uninstall.sh scripts/test-supervisor.sh scripts/test-settings.sh
 
+# Offline guide/dashboard checks in a separate, temporary headless Chrome.
+check-web:
+    pnpm test
+
+check-docs:
+    pnpm test:guide
+
+check-dashboard:
+    pnpm test:dashboard
+
 # Isolated session/runtime: three control clients, no overlays or recurring timer.
 check-native:
     ./scripts/test-supervisor.sh
@@ -28,6 +38,14 @@ preview-settings output="/tmp/naal-settings-native" width="1000" height="660":
 # Offscreen PPM snapshots/timings; no Wayland connection or keyboard focus.
 preview-breathing output="/tmp/naal-breathing-native":
     cargo run --locked --release --example breathing-preview -- "{{output}}"
+
+# Offscreen composed reminders with fixed demo history at three desktop sizes.
+preview-overlay output="/tmp/naal-overlay-native":
+    TZ=UTC0 cargo run --locked --example overlay-preview -- "{{output}}"
+
+# Six offline HTML fixtures; never reads saved history or starts a browser.
+preview-dashboard output="/tmp/naal-dashboard-demo":
+    TZ=UTC0 cargo run --locked --example dashboard-preview -- "{{output}}"
 
 # Read-only: creates no overlay and captures no focus.
 probe:

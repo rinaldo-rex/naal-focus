@@ -12,6 +12,20 @@ Parallel runs can occasionally report `Activity history is busy`. Retry with `RU
 
 The probe opens no reminder and collects no window titles. Read its printed guard status as well as its exit code.
 
+## Offline browser checks
+
+Install Node.js 22+, pnpm, and Google Chrome, then run:
+
+```sh
+pnpm install --frozen-lockfile
+just check-web
+# Or: just check-docs / just check-dashboard
+```
+
+These separate checks validate guide links, anchors, image dimensions, and desktop layouts, then exercise the generated dashboard and its offline HTML download. They use fixed demo data, a temporary headless browser profile, and no network. Your open browser and saved history stay untouched.
+
+The desktop matrix covers 1000×660, 1920×1080, and 1707×960 at 2× scaling. Screenshots, downloaded HTML, and failure traces go under `target/browser-tests/`; generated demo pages live under `target/browser-fixtures/`. These artifacts are for review, not cross-machine pixel baselines.
+
 ## Native checks
 
 ```sh
@@ -25,10 +39,14 @@ These require a COSMIC Wayland session and `dbus-run-session`. They isolate sett
 
 ```sh
 just preview-breathing
+just preview-overlay
+just preview-dashboard
 just preview-settings
 ```
 
-Breathing previews are offscreen; settings previews open a demo capture window. Both write PPM images under `/tmp` without reading personal history.
+Breathing and composed-reminder previews write offscreen PPM images. The overlay preview covers six states at three desktop sizes, including history, suggestions, saved text, charts, and reflections off. The dashboard preview writes six standalone HTML fixtures. Settings previews open a demo capture window. All default to `/tmp` and never read personal history.
+
+The overlay/dashboard recipes fix the time zone to UTC and use a fixed date; set `TZ=UTC0` when running their Cargo examples directly. Desktop fonts can affect rendered pixels. Review captures before replacing guide images; keep their documented dimensions in sync.
 
 ## Manual checks
 
