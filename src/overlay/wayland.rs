@@ -62,9 +62,6 @@ impl App {
                 mapped: false,
                 keyboard_focus_observed: false,
                 buffers: Vec::new(),
-                chart_versions: Vec::new(),
-                entrance_dirty: Vec::new(),
-                entrance_backdrops: Vec::new(),
                 reveal_cache: None,
                 buffer_size: (0, 0, 0),
             });

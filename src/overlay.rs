@@ -19,6 +19,7 @@ use crate::{
     recall::PendingHistory,
     render,
 };
+use drawing::FrameBuffer;
 use fontdue::Font;
 use payload::{read_payload, read_stdin_quote};
 use smithay_client_toolkit::{
@@ -31,10 +32,7 @@ use smithay_client_toolkit::{
     registry::RegistryState,
     seat::{SeatState, keyboard::Modifiers},
     shell::wlr_layer::{LayerShell, LayerSurface},
-    shm::{
-        Shm,
-        slot::{Buffer, SlotPool},
-    },
+    shm::{Shm, slot::SlotPool},
 };
 use std::{collections::HashMap, error::Error, io::Read, time::Duration};
 use wayland_client::{
@@ -248,10 +246,7 @@ struct Active {
     scale: i32,
     mapped: bool,
     keyboard_focus_observed: bool,
-    buffers: Vec<Buffer>,
-    chart_versions: Vec<u64>,
-    entrance_dirty: Vec<bool>,
-    entrance_backdrops: Vec<[u8; 4]>,
+    buffers: Vec<FrameBuffer>,
     reveal_cache: Option<Vec<u8>>,
     buffer_size: (u32, u32, u32),
 }

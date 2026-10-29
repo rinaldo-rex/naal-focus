@@ -4,9 +4,46 @@ use crate::{
     render,
     time::{system_ms, to_local},
 };
-use smithay_client_toolkit::shell::WaylandSurface;
+use smithay_client_toolkit::{
+    shell::WaylandSurface,
+    shm::slot::{Buffer, SlotPool},
+};
 use std::{error::Error, time::Duration};
 use wayland_client::protocol::wl_shm;
+
+pub(super) struct FrameBuffer {
+    buffer: Buffer,
+    chart_version: u64,
+    entrance_dirty: bool,
+    entrance_backdrop: [u8; 4],
+}
+
+impl FrameBuffer {
+    fn new(buffer: Buffer) -> Self {
+        Self {
+            buffer,
+            chart_version: 0,
+            entrance_dirty: false,
+            entrance_backdrop: [0; 4],
+        }
+    }
+
+    fn rendered(&mut self, chart_revision: u64, entrance_active: bool, background: [u8; 4]) {
+        self.chart_version = if entrance_active { 0 } else { chart_revision };
+        self.entrance_dirty = entrance_active;
+        self.entrance_backdrop = background;
+    }
+
+    fn available(buffers: &[Self], pool: &mut SlotPool, entrance_active: bool) -> Option<usize> {
+        buffers
+            .iter()
+            .enumerate()
+            .filter(|(_, frame)| pool.canvas(&frame.buffer).is_some())
+            // Restore both caches before returning to ordinary input updates.
+            .min_by_key(|(_, frame)| entrance_active || !frame.entrance_dirty)
+            .map(|(i, _)| i)
+    }
+}
 
 impl App {
     pub(super) fn repaint(&mut self, now: Duration) -> Result<(), Box<dyn Error>> {
@@ -50,8 +87,11 @@ impl App {
             }
         }
         self.last_paint = now;
-        self.dirty =
-            !entrance.active && self.active.iter().any(|a| a.entrance_dirty.contains(&true));
+        self.dirty = !entrance.active
+            && self
+                .active
+                .iter()
+                .any(|a| a.buffers.iter().any(|frame| frame.entrance_dirty));
         Ok(())
     }
     pub(super) fn draw(&mut self, index: usize, now: Duration) -> Result<(), Box<dyn Error>> {
@@ -77,22 +117,12 @@ impl App {
         }
         if self.active[index].buffer_size != (width, height, scale) {
             self.active[index].buffers.clear();
-            self.active[index].chart_versions.clear();
-            self.active[index].entrance_dirty.clear();
-            self.active[index].entrance_backdrops.clear();
             self.active[index].reveal_cache = None;
             self.active[index].buffer_size = (width, height, scale);
         }
         let entrance = self.entrance_frame(now);
         let active = &self.active[index];
-        let available = active
-            .buffers
-            .iter()
-            .enumerate()
-            .filter(|(_, buffer)| self.pool.canvas(*buffer).is_some())
-            // Restore both caches before returning to ordinary input updates.
-            .min_by_key(|(i, _)| entrance.active || !active.entrance_dirty[*i])
-            .map(|(i, _)| i);
+        let available = FrameBuffer::available(&active.buffers, &mut self.pool, entrance.active);
         let (buffer_index, fresh) = if let Some(index) = available {
             (index, false)
         } else if self.active[index].buffers.len() < 2 {
@@ -102,23 +132,20 @@ impl App {
                 width as i32 * 4,
                 wl_shm::Format::Argb8888,
             )?;
-            self.active[index].buffers.push(buffer);
-            self.active[index].chart_versions.push(0);
-            self.active[index].entrance_dirty.push(false);
-            self.active[index].entrance_backdrops.push([0; 4]);
+            self.active[index].buffers.push(FrameBuffer::new(buffer));
             (self.active[index].buffers.len() - 1, true)
         } else {
             // Never allocate an unbounded queue of frames if the compositor is
             // slow or stops releasing buffers during a long writing session.
             return Ok(());
         };
-        let restore = self.active[index].entrance_dirty[buffer_index];
+        let restore = self.active[index].buffers[buffer_index].entrance_dirty;
         let full = fresh || restore;
         let charts_changed =
-            full || self.active[index].chart_versions[buffer_index] != self.chart_revision;
+            full || self.active[index].buffers[buffer_index].chart_version != self.chart_revision;
         let background = render::breathing_background(entrance);
         let full_entrance =
-            fresh || self.active[index].entrance_backdrops[buffer_index] != background;
+            fresh || self.active[index].buffers[buffer_index].entrance_backdrop != background;
         if !entrance.active {
             self.active[index].reveal_cache = None;
         }
@@ -129,7 +156,7 @@ impl App {
             &self.focus_settings,
         );
         let mut reveal_cache = None;
-        let buffer = &self.active[index].buffers[buffer_index];
+        let buffer = &self.active[index].buffers[buffer_index].buffer;
         let canvas = self.pool.canvas(buffer).ok_or("Buffer is still in use")?;
         if entrance.active && entrance.reflection == 0.0 {
             render::render_breathing(
@@ -294,16 +321,10 @@ impl App {
         buffer.attach_to(surface)?;
         active.layer.commit();
         let active = &mut self.active[index];
-        active.chart_versions[buffer_index] = if entrance.active {
-            0
-        } else {
-            self.chart_revision
-        };
+        active.buffers[buffer_index].rendered(self.chart_revision, entrance.active, background);
         if let Some(cache) = reveal_cache {
             active.reveal_cache = Some(cache);
         }
-        active.entrance_dirty[buffer_index] = entrance.active;
-        active.entrance_backdrops[buffer_index] = background;
         if !active.mapped {
             active.mapped = true;
             if self.mapped_at.is_none() {
@@ -329,15 +350,13 @@ impl App {
                 wl_shm::Format::Argb8888,
             )?;
             canvas.copy_from_slice(&seed);
-            self.active[index].buffers.push(buffer);
-            self.active[index].chart_versions.push(if entrance.active {
-                0
-            } else {
-                self.chart_revision
-            });
-            self.active[index].entrance_dirty.push(entrance.active);
-            self.active[index].entrance_backdrops.push(background);
+            let mut frame = FrameBuffer::new(buffer);
+            frame.rendered(self.chart_revision, entrance.active, background);
+            self.active[index].buffers.push(frame);
         }
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests;
