@@ -112,35 +112,39 @@ fn page_content(form: &SettingsForm, page: Page) -> Element<'_, Message> {
         .into(),
         Page::Breathing => {
             let enabled = form.breathing.enabled;
-            let controls = panel(vec![
-                setting_row(
-                    "Breathing entrance",
-                    widget::toggler(enabled).on_toggle(Message::BreathingEnabled),
-                ),
-                setting_row(
-                    "Pace",
-                    choice(
-                        &BREATH_PACES,
-                        Pace::ALL.iter().position(|p| *p == form.breathing.pace).unwrap_or(1),
-                        Message::BreathingPace,
-                        enabled,
+            let controls = widget::row![
+                panel(vec![
+                    setting_row(
+                        "Breathing entrance",
+                        widget::toggler(enabled).on_toggle(Message::BreathingEnabled),
                     ),
-                ),
-                setting_row(
-                    "Breaths",
-                    choice(
-                        &BREATH_COUNTS,
-                        usize::from(form.breathing.cycles.saturating_sub(1)),
-                        Message::BreathingCycles,
-                        enabled,
+                    setting_row(
+                        "Reduced motion",
+                        widget::toggler(form.breathing.reduced_motion)
+                            .on_toggle_maybe(enabled.then_some(Message::BreathingReducedMotion)),
                     ),
-                ),
-                setting_row(
-                    "Reduced motion",
-                    widget::toggler(form.breathing.reduced_motion)
-                        .on_toggle_maybe(enabled.then_some(Message::BreathingReducedMotion)),
-                ),
-            ]);
+                ]),
+                panel(vec![
+                    setting_row(
+                        "Pace",
+                        choice(
+                            &BREATH_PACES,
+                            Pace::ALL.iter().position(|p| *p == form.breathing.pace).unwrap_or(1),
+                            Message::BreathingPace,
+                            enabled,
+                        ),
+                    ),
+                    setting_row(
+                        "Breaths",
+                        choice(
+                            &BREATH_COUNTS,
+                            usize::from(form.breathing.cycles.saturating_sub(1)),
+                            Message::BreathingCycles,
+                            enabled,
+                        ),
+                    ),
+                ]),
+            ].spacing(12);
             let patterns = |families: &[Family]| {
                 panel(
                     families
@@ -149,7 +153,7 @@ fn page_content(form: &SettingsForm, page: Page) -> Element<'_, Message> {
                             let control = widget::checkbox(form.breathing.families.contains(&family))
                                 .label(family.label())
                                 .on_toggle_maybe(enabled.then_some(move |on| Message::BreathingFamily(family, on)));
-                            widget::container(control).padding([10, 14]).into()
+                            widget::container(control).padding([8, 14]).into()
                         })
                         .collect(),
                 )
@@ -157,8 +161,8 @@ fn page_content(form: &SettingsForm, page: Page) -> Element<'_, Message> {
             widget::column![
                 controls,
                 widget::text::heading("Patterns"),
-                widget::row![patterns(&[Family::Lattice, Family::Constellation]),
-                    patterns(&[Family::Polygons, Family::Weave])]
+                widget::row![patterns(&Family::ALL[..Family::ALL.len().div_ceil(2)]),
+                    patterns(&Family::ALL[Family::ALL.len().div_ceil(2)..])]
                     .spacing(12),
             ]
             .spacing(12)

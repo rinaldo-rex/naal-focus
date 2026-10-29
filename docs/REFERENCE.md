@@ -42,7 +42,7 @@ Settings live at `$XDG_CONFIG_HOME/naal-focus/settings.json`, falling back to `~
 | Breathing entrance | On | On/off; separate from recurring reminders |
 | Breath pace | 4s in / 6s out | 3s/4s, 4s/6s, or 5s/5s |
 | Breaths | One | One or two |
-| Breathing patterns | All four | Any nonempty subset of lattice, polygons, constellation, weave |
+| Breathing patterns | All seven | Any nonempty subset of Radial lattice, Nested polygons, Constellation, Woven field, Ember bloom, Moon pool, Glass jelly |
 | Reduced motion | Off | Static geometry with timed breath cues and fades |
 | Typing time limit | 120 seconds | 30–600 seconds; separate from duration |
 | Text size | 36 logical pixels | 22–72 |
@@ -65,11 +65,11 @@ Every monitor popup and `naal-focus --settings` shares one timer through session
 
 ## Breathing entrance
 
-The native overlay chooses one allowed family and a fresh random seed for each reminder. Geometry is generated once; only its breath amplitude changes afterward. Connections never pop in/out and exhaling retraces inhaling. Shape, color, and monotonic timeline are shared across outputs, with layout adapted to each desktop size/scale. Consecutive reminders may choose the same family with different geometry.
+The native overlay chooses one allowed family and a fresh random seed for each reminder. The seeded model is generated once. The four geometric patterns retrace their inhale on exhale; Ember bloom, Moon pool, and Glass jelly also drift, ripple, or sway gently. Connections never pop in/out. Shape, color, and monotonic timeline are shared across outputs, with layout adapted to each desktop size/scale. Consecutive reminders may choose the same family with different geometry.
 
 The entrance fades in for two seconds, guides one or two complete breaths, then fades out the geometry and reveals the normal overlay over two seconds. Default timing is **14 seconds**, or **24 seconds** with two 4s/6s breaths; the shorter pace takes **11 or 18 seconds**. Quote, reflection/history, charts, and focus sidebar stay hidden during breathing. The full normal reflection duration and fixed typing allowance are preserved. All typing, Enter, and field clicks are ignored until the reveal finishes; **Escape dismisses every output immediately**. Safety cancellation and both watchdogs remain active throughout.
 
-**Settings… → Breathing** offers on/off, reduced motion, pace, breath count, and four family switches. Selecting no families is a validation error, not a silent fallback. Reduced motion freezes the shape but retains the chosen timing, breath cues, and gentle fades. Switching the entrance off restores immediate reflection and the old lifetime budget. Existing version-1 settings default to breathing on, all four families, one balanced breath, and reduced motion off; recurrence remains unchanged.
+**Settings… → Breathing** offers on/off, reduced motion, pace, breath count, and seven pattern choices. Selecting no families is a validation error, not a silent fallback. Reduced motion freezes every layer, including glow, ripples, and tendrils, but retains the chosen timing, breath cues, and gentle fades. Switching the entrance off restores immediate reflection and the old lifetime budget. New or missing breathing settings default to breathing on, all seven families, one balanced breath, and reduced motion off. Explicit saved pattern selections and recurrence remain unchanged.
 
 The optional settings object is:
 
@@ -79,11 +79,11 @@ The optional settings object is:
   "reduced_motion": false,
   "pace": "balanced",
   "cycles": 1,
-  "families": ["lattice", "polygons", "constellation", "weave"]
+  "families": ["lattice", "polygons", "constellation", "weave", "ember_bloom", "moon_pool", "glass_jelly"]
 }
 ```
 
-Other pace values are `short` (3s/4s) and `even` (5s/5s). The helper accepts `--breathing on|off`, `--breath-pace short|balanced|even`, `--breath-cycles 1|2`, `--breath-patterns lattice,polygons,constellation,weave`, and `--reduced-motion`. These are validated before creating surfaces. Manual helper runs still **capture keyboard focus** and require the consented testing procedure.
+Other pace values are `short` (3s/4s) and `even` (5s/5s). The helper accepts `--breathing on|off`, `--breath-pace short|balanced|even`, `--breath-cycles 1|2`, `--breath-patterns lattice,polygons,constellation,weave,ember_bloom,moon_pool,glass_jelly`, and `--reduced-motion`. These are validated before creating surfaces. Manual helper runs still **capture keyboard focus** and require the consented testing procedure.
 
 ## Activity reflections and history
 

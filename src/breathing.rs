@@ -2,6 +2,8 @@
 use serde::{Deserialize, Serialize};
 use std::{f32::consts::TAU, time::Duration};
 
+mod organic;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Family {
@@ -9,13 +11,19 @@ pub enum Family {
     Polygons,
     Constellation,
     Weave,
+    EmberBloom,
+    MoonPool,
+    GlassJelly,
 }
 impl Family {
-    pub const ALL: [Self; 4] = [
+    pub const ALL: [Self; 7] = [
         Self::Lattice,
         Self::Polygons,
         Self::Constellation,
         Self::Weave,
+        Self::EmberBloom,
+        Self::MoonPool,
+        Self::GlassJelly,
     ];
     pub fn as_str(self) -> &'static str {
         match self {
@@ -23,6 +31,9 @@ impl Family {
             Self::Polygons => "polygons",
             Self::Constellation => "constellation",
             Self::Weave => "weave",
+            Self::EmberBloom => "ember_bloom",
+            Self::MoonPool => "moon_pool",
+            Self::GlassJelly => "glass_jelly",
         }
     }
     pub fn label(self) -> &'static str {
@@ -31,6 +42,9 @@ impl Family {
             Self::Polygons => "Nested polygons",
             Self::Constellation => "Constellation",
             Self::Weave => "Woven field",
+            Self::EmberBloom => "Ember bloom",
+            Self::MoonPool => "Moon pool",
+            Self::GlassJelly => "Glass jelly",
         }
     }
 }
@@ -86,7 +100,7 @@ impl Settings {
         if !(1..=2).contains(&self.cycles) {
             return Err("Choose one or two breaths.".into());
         }
-        if self.families.is_empty() || self.families.len() > 4 {
+        if self.families.is_empty() || self.families.len() > Family::ALL.len() {
             return Err("Choose at least one breathing pattern.".into());
         }
         if self
@@ -113,6 +127,7 @@ impl Settings {
 pub struct Point(pub f32, pub f32);
 #[derive(Clone, Debug, PartialEq)]
 enum Shape {
+    Organic(organic::Study),
     Lattice {
         spokes: usize,
         rings: usize,
@@ -170,6 +185,9 @@ impl Pattern {
         let rotation = rng.unit() * TAU;
         let direction = if rng.unit() > 0.5 { 1.0 } else { -1.0 };
         let shape = match family {
+            Family::EmberBloom | Family::MoonPool | Family::GlassJelly => {
+                Shape::Organic(organic::Study::generate(family, &mut rng))
+            }
             Family::Lattice => Shape::Lattice {
                 spokes: rng.int(7, 14),
                 rings: rng.int(3, 6),
@@ -227,6 +245,9 @@ impl Pattern {
             Family::Polygons => ([211, 194, 156], [211, 206, 173]),
             Family::Constellation => ([160, 198, 206], [182, 207, 217]),
             Family::Weave => ([195, 177, 208], [211, 183, 203]),
+            Family::EmberBloom => ([232, 157, 106], [245, 207, 154]),
+            Family::MoonPool => ([173, 212, 204], [218, 229, 209]),
+            Family::GlassJelly => ([187, 164, 223], [149, 213, 219]),
         };
         let tint = rng.unit();
         let color = std::array::from_fn(|i| {
@@ -235,16 +256,25 @@ impl Pattern {
         Self {
             family,
             color,
-            rotation,
+            // Water stays level and jellyfish stay upright on every monitor.
+            rotation: if matches!(&shape, Shape::Organic(_)) {
+                0.0
+            } else {
+                rotation
+            },
             direction,
             shape,
         }
     }
     /// Normalized vertices; bounded size regardless of monitor size or scale.
     pub fn geometry(&self, amount: f32) -> Geometry {
+        self.animated_geometry(amount, 0.0)
+    }
+    pub fn animated_geometry(&self, amount: f32, motion: f32) -> Geometry {
         let a = amount.clamp(0.0, 1.0);
         let mut g = Geometry::default();
         match &self.shape {
+            Shape::Organic(study) => study.geometry(&mut g, a, motion.clamp(0.0, 24.0)),
             Shape::Lattice {
                 spokes,
                 rings,
@@ -341,9 +371,9 @@ impl Pattern {
                 }
             }
         }
-        for (p, q, _) in &mut g.lines {
-            *p = rotate(*p, self.rotation);
-            *q = rotate(*q, self.rotation);
+        for line in &mut g.lines {
+            line.from = rotate(line.from, self.rotation);
+            line.to = rotate(line.to, self.rotation);
         }
         for (p, _, _) in &mut g.dots {
             *p = rotate(*p, self.rotation);
@@ -360,14 +390,63 @@ fn rotate(p: Point, angle: f32) -> Point {
         p.0 * angle.sin() + p.1 * angle.cos(),
     )
 }
+#[derive(Debug, PartialEq)]
+pub struct Stroke {
+    pub from: Point,
+    pub to: Point,
+    pub opacity: f32,
+    pub color: Option<[u8; 3]>,
+    pub width: f32,
+}
+#[derive(Debug, PartialEq)]
+pub struct Glow {
+    pub center: Point,
+    pub radius: f32,
+    pub color: [u8; 3],
+    pub opacity: f32,
+}
+#[derive(Debug, PartialEq)]
+pub struct Orb {
+    pub center: Point,
+    pub radius: f32,
+    pub palette: [[u8; 3]; 3],
+}
 #[derive(Default, Debug, PartialEq)]
 pub struct Geometry {
-    pub lines: Vec<(Point, Point, f32)>,
+    pub lines: Vec<Stroke>,
     pub dots: Vec<(Point, f32, f32)>,
+    pub glows: Vec<Glow>,
+    pub orbs: Vec<Orb>,
 }
 impl Geometry {
-    fn line(&mut self, a: Point, b: Point, opacity: f32) {
-        self.lines.push((a, b, opacity));
+    fn line(&mut self, from: Point, to: Point, opacity: f32) {
+        self.lines.push(Stroke {
+            from,
+            to,
+            opacity,
+            color: None,
+            width: 1.0,
+        });
+    }
+    fn curve(&mut self, points: &[Point], color: [u8; 3], opacity: f32, closed: bool) {
+        for pair in points.windows(2) {
+            self.lines.push(Stroke {
+                from: pair[0],
+                to: pair[1],
+                opacity,
+                color: Some(color),
+                width: 0.7,
+            });
+        }
+        if closed && let (Some(&from), Some(&to)) = (points.last(), points.first()) {
+            self.lines.push(Stroke {
+                from,
+                to,
+                opacity,
+                color: Some(color),
+                width: 0.7,
+            });
+        }
     }
     fn closed(&mut self, points: &[Point], opacity: f32) {
         for i in 0..points.len() {
@@ -387,6 +466,7 @@ pub struct Frame {
     pub pattern: f32,
     pub reflection: f32,
     pub amount: f32,
+    pub motion: f32,
     pub cue: &'static str,
 }
 impl Entrance {
@@ -415,6 +495,7 @@ impl Entrance {
                 pattern: 0.0,
                 reflection: 1.0,
                 amount: 0.0,
+                motion: 0.0,
                 cue: "",
             };
         }
@@ -440,6 +521,11 @@ impl Entrance {
                 0.42
             } else {
                 amount
+            },
+            motion: if self.settings.reduced_motion {
+                0.0
+            } else {
+                e.min(end)
             },
             cue: if e >= end {
                 ""
@@ -510,6 +596,85 @@ mod tests {
         );
     }
     #[test]
+    fn family_names_round_trip_and_explicit_legacy_selections_are_preserved() {
+        assert_eq!(Settings::default().families, Family::ALL);
+        Settings::default().validate().unwrap();
+        for family in Family::ALL {
+            let json = format!("\"{}\"", family.as_str());
+            assert_eq!(serde_json::from_str::<Family>(&json).unwrap(), family);
+            assert_eq!(serde_json::to_string(&family).unwrap(), json);
+        }
+        let old: Settings =
+            serde_json::from_str(r#"{"families":["lattice","polygons","constellation","weave"]}"#)
+                .unwrap();
+        old.validate().unwrap();
+        assert_eq!(old.families, Family::ALL[..4]);
+        assert_eq!(
+            serde_json::from_str::<Settings>(&serde_json::to_string(&old).unwrap()).unwrap(),
+            old
+        );
+    }
+    #[test]
+    fn flowing_studies_share_deterministic_time_and_reduced_motion_freezes_every_layer() {
+        for family in Family::ALL {
+            for seed in 0..8 {
+                let pattern = Pattern::generate(seed, family);
+                let at = |motion| pattern.animated_geometry(0.5, motion);
+                assert_eq!(at(3.0), at(3.0));
+                if matches!(
+                    family,
+                    Family::EmberBloom | Family::MoonPool | Family::GlassJelly
+                ) {
+                    assert_ne!(at(3.0), at(8.0));
+                } else {
+                    assert_eq!(at(3.0), at(8.0));
+                }
+                for motion in [0.0, 3.0, 8.0, 24.0] {
+                    let g = at(motion);
+                    assert!(g.lines.len() <= 10_000 && g.dots.len() <= 43);
+                    assert!(g.glows.len() <= 2 && g.orbs.len() <= 1);
+                    for line in g.lines {
+                        for Point(x, y) in [line.from, line.to] {
+                            assert!(x.is_finite() && y.is_finite() && x.hypot(y) < 1.8);
+                        }
+                        assert!((0.0..=1.0).contains(&line.opacity));
+                        assert!((0.0..=1.0).contains(&line.width));
+                    }
+                    for glow in g.glows {
+                        assert!(glow.center.0.hypot(glow.center.1) + glow.radius < 1.8);
+                        assert!(glow.radius > 0.0 && (0.0..=1.0).contains(&glow.opacity));
+                    }
+                    for orb in g.orbs {
+                        assert!(
+                            orb.center.0.hypot(orb.center.1) + orb.radius < 1.8 && orb.radius > 0.0
+                        );
+                    }
+                }
+                let entrance = Entrance::new(
+                    Settings {
+                        families: vec![family],
+                        reduced_motion: true,
+                        ..Settings::default()
+                    },
+                    seed,
+                );
+                let first = entrance.frame(Duration::from_secs(3));
+                let second = entrance.frame(Duration::from_secs(8));
+                assert_ne!(first.cue, second.cue);
+                assert_eq!(first.motion, 0.0);
+                assert_eq!(second.motion, 0.0);
+                assert_eq!(
+                    entrance
+                        .pattern
+                        .animated_geometry(first.amount, first.motion),
+                    entrance
+                        .pattern
+                        .animated_geometry(second.amount, second.motion),
+                );
+            }
+        }
+    }
+    #[test]
     fn seeded_models_are_stable_varied_and_bounded() {
         for family in Family::ALL {
             for seed in 0..64 {
@@ -522,13 +687,13 @@ mod tests {
                 assert_eq!(initial, p.geometry(0.0));
                 for amount in [0.0, 0.3, 0.7, 1.0] {
                     let g = p.geometry(amount);
-                    assert!(g.lines.len() <= 1500);
+                    assert!(g.lines.len() <= 10_000);
                     assert!(g.dots.len() <= 43);
-                    for (a, b, opacity) in g.lines {
-                        for Point(x, y) in [a, b] {
+                    for line in g.lines {
+                        for Point(x, y) in [line.from, line.to] {
                             assert!(x.is_finite() && y.is_finite() && x.hypot(y) < 1.8);
                         }
-                        assert!((0.0..=1.0).contains(&opacity));
+                        assert!((0.0..=1.0).contains(&line.opacity));
                     }
                 }
             }

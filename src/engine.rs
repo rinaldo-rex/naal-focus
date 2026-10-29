@@ -630,7 +630,7 @@ mod tests {
     #[test]
     fn helper_receives_every_breathing_preference_and_watchdog_budget() {
         use crate::breathing::{Family, Pace};
-        for mask in 1..16 {
+        for mask in 1..(1 << Family::ALL.len()) {
             for enabled in [false, true] {
                 for pace in Pace::ALL {
                     for cycles in [1, 2] {

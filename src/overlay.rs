@@ -67,7 +67,7 @@ Usage: naal-focus-overlay [OPTIONS]
   --breathing MODE     on (default) or off; entrance precedes reflection
   --breath-pace PACE   short (3/4), balanced (4/6, default), even (5/5)
   --breath-cycles N    One or two breaths (default 1)
-  --breath-patterns LIST  lattice,polygons,constellation,weave (default all)
+  --breath-patterns LIST  lattice,polygons,constellation,weave,ember_bloom,moon_pool,glass_jelly
   --reduced-motion    Static geometry with timed breath cues
   --payload            Read the supervisor's bounded JSON quote/history payload
   --stdin              Read one raw UTF-8 quote (including line breaks) from stdin

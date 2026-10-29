@@ -82,6 +82,9 @@ fn monitor_clients_share_controls_and_take_over_without_duplicate_timers() {
             families: vec![
                 naal_focus::breathing::Family::Polygons,
                 naal_focus::breathing::Family::Weave,
+                naal_focus::breathing::Family::EmberBloom,
+                naal_focus::breathing::Family::MoonPool,
+                naal_focus::breathing::Family::GlassJelly,
             ],
         },
         charts: config::ChartSettings {

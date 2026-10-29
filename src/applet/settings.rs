@@ -479,7 +479,12 @@ mod tests {
         form.breathing.pace = Pace::Short;
         form.breathing.cycles = 2;
         form.breathing.reduced_motion = true;
-        form.breathing.families = vec![Family::Weave];
+        form.breathing.families = vec![
+            Family::Weave,
+            Family::EmberBloom,
+            Family::MoonPool,
+            Family::GlassJelly,
+        ];
         form.dirty = true;
         form.sync(&original, None);
         let saved = form.save(&original).unwrap();

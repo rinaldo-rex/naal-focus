@@ -1,6 +1,6 @@
 //! Small damaged-region geometry rendering; full surfaces change only during fades.
 use super::{BACKGROUND, Image, Rect, premultiply};
-use crate::breathing::{Frame, Pattern, Point};
+use crate::breathing::{Frame, Orb, Pattern, Point};
 use fontdue::Font;
 
 fn layout(width: f32, height: f32, scale: f32) -> (Point, f32) {
@@ -64,14 +64,30 @@ pub fn render_breathing(
     }
     let (center, radius) = layout(width as f32, height as f32, scale);
     let transform = |p: Point| Point(center.0 + p.0 * radius, center.1 + p.1 * radius);
-    let geometry = view.pattern.geometry(frame.amount);
-    for (a, b, opacity) in geometry.lines {
+    let geometry = view.pattern.animated_geometry(frame.amount, frame.motion);
+    for glow in geometry.glows {
+        image.glow(
+            transform(glow.center),
+            glow.radius * radius,
+            glow.color,
+            glow.opacity * frame.pattern,
+        );
+    }
+    for line in geometry.lines {
         image.line(
-            transform(a),
-            transform(b),
-            scale,
-            view.pattern.color,
-            opacity * frame.pattern,
+            transform(line.from),
+            transform(line.to),
+            scale * line.width,
+            line.color.unwrap_or(view.pattern.color),
+            line.opacity * frame.pattern,
+        );
+    }
+    for orb in geometry.orbs {
+        image.orb(
+            transform(orb.center),
+            orb.radius * radius,
+            &orb,
+            frame.pattern,
         );
     }
     for (point, radius, opacity) in geometry.dots {
@@ -106,6 +122,17 @@ pub fn render_reveal(canvas: &mut [u8], cached: &[u8], opacity: f32) {
         }
     }
 }
+fn source_over(destination: u32, source: u32) -> u32 {
+    let inverse = 255 - (source >> 24);
+    // Two separated byte channels fit in each product. This is exact floor / 255.
+    let attenuate = |pair: u32| {
+        let product = pair * inverse;
+        ((product + 0x0001_0001 + ((product >> 8) & 0x00ff_00ff)) >> 8) & 0x00ff_00ff
+    };
+    source
+        + attenuate(destination & 0x00ff_00ff)
+        + (attenuate((destination >> 8) & 0x00ff_00ff) << 8)
+}
 impl Image<'_> {
     fn blend(&mut self, x: i32, y: i32, rgb: [u8; 3], opacity: f32) {
         if x < 0
@@ -130,6 +157,89 @@ impl Image<'_> {
                 << shift;
         }
         dest.copy_from_slice(&color.to_ne_bytes());
+    }
+    fn glow(&mut self, center: Point, radius: f32, rgb: [u8; 3], opacity: f32) {
+        if radius <= 0.0 || opacity <= 0.0 {
+            return;
+        }
+        // Cache radial falloff and premultiplication; large 2× glows otherwise
+        // repeat a square root and four channel conversions for every pixel.
+        let samples: [u32; 1025] = std::array::from_fn(|i| {
+            let distance = (i as f32 / 1024.0).sqrt();
+            let falloff = if distance < 0.38 {
+                1.0 - distance / 0.38 * 0.68
+            } else {
+                (1.0 - distance) / 0.62 * 0.32
+            };
+            let alpha = (opacity * falloff * 255.0).clamp(0.0, 255.0).round() as u32;
+            (alpha << 24)
+                | ((u32::from(rgb[0]) * alpha / 255) << 16)
+                | ((u32::from(rgb[1]) * alpha / 255) << 8)
+                | (u32::from(rgb[2]) * alpha / 255)
+        });
+        let left = (center.0 - radius).max(self.clip.x).max(0.0).ceil() as usize;
+        let right = (center.0 + radius)
+            .min(self.clip.x + self.clip.width)
+            .min(self.width as f32)
+            .ceil()
+            .max(0.0) as usize;
+        let top = (center.1 - radius).max(self.clip.y).max(0.0).ceil() as usize;
+        let bottom = (center.1 + radius)
+            .min(self.clip.y + self.clip.height)
+            .min(self.height as f32)
+            .ceil()
+            .max(0.0) as usize;
+        if left >= right || top >= bottom {
+            return;
+        }
+        let factor = 1024.0 / (radius * radius);
+        for y in top..bottom {
+            let dy = y as f32 - center.1;
+            let offset = (y * self.width + left) * 4;
+            let row = &mut self.canvas[offset..offset + (right - left) * 4];
+            for (column, pixel) in row.chunks_exact_mut(4).enumerate() {
+                let dx = (left + column) as f32 - center.0;
+                let index = ((dx * dx + dy * dy) * factor).round() as usize;
+                let source = samples[index.min(1024)];
+                if source != 0 {
+                    let old = u32::from_ne_bytes(pixel.try_into().unwrap());
+                    pixel.copy_from_slice(&source_over(old, source).to_ne_bytes());
+                }
+            }
+        }
+    }
+    fn orb(&mut self, center: Point, radius: f32, orb: &Orb, opacity: f32) {
+        if radius <= 0.0 || opacity <= 0.0 {
+            return;
+        }
+        let stops = [
+            (0.0, orb.palette[1], 0.94),
+            (0.42, orb.palette[0], 0.65),
+            (0.82, orb.palette[2], 0.22),
+            (1.0, orb.palette[2], 0.03),
+        ];
+        for y in (center.1 - radius - 1.0).floor() as i32..=(center.1 + radius + 1.0).ceil() as i32
+        {
+            for x in
+                (center.0 - radius - 1.0).floor() as i32..=(center.0 + radius + 1.0).ceil() as i32
+            {
+                let dx = x as f32 - center.0;
+                let dy = y as f32 - center.1;
+                let coverage = (radius + 0.5 - dx.hypot(dy)).clamp(0.0, 1.0);
+                if coverage == 0.0 {
+                    continue;
+                }
+                let distance = ((dx / radius + 0.33).hypot(dy / radius + 0.4) / 1.4).min(1.0);
+                let pair = stops.windows(2).find(|pair| distance <= pair[1].0).unwrap();
+                let amount = (distance - pair[0].0) / (pair[1].0 - pair[0].0);
+                let color = std::array::from_fn(|i| {
+                    (f32::from(pair[0].1[i]) * (1.0 - amount) + f32::from(pair[1].1[i]) * amount)
+                        .round() as u8
+                });
+                let alpha = pair[0].2 * (1.0 - amount) + pair[1].2 * amount;
+                self.blend(x, y, color, alpha * opacity * coverage);
+            }
+        }
     }
     fn disc(&mut self, center: Point, radius: f32, rgb: [u8; 3], opacity: f32) {
         let extent = radius + 1.0;
@@ -177,6 +287,25 @@ mod tests {
     use super::*;
     use crate::breathing::{Entrance, Family, Settings};
     use std::time::Duration;
+    #[test]
+    fn packed_source_over_matches_each_premultiplied_channel_exactly() {
+        for alpha in 0..=255u32 {
+            for old_alpha in 0..=255u32 {
+                let source = (alpha << 24) | ((alpha / 2) << 16) | ((alpha / 3) << 8) | alpha;
+                let old = (old_alpha << 24)
+                    | (old_alpha << 16)
+                    | ((old_alpha / 2) << 8)
+                    | (old_alpha / 3);
+                let expected = [0, 8, 16, 24].into_iter().fold(0, |pixel, shift| {
+                    pixel
+                        | ((((source >> shift) & 255)
+                            + ((old >> shift) & 255) * (255 - alpha) / 255)
+                            << shift)
+                });
+                assert_eq!(source_over(old, source), expected);
+            }
+        }
+    }
     #[test]
     fn geometry_is_clipped_premultiplied_and_replayable_at_desktop_scales() {
         let font = super::super::default_font().unwrap();
@@ -233,7 +362,69 @@ mod tests {
                 );
                 assert_eq!(canvas, expected);
                 assert!(canvas.chunks_exact(4).any(|p| p != premultiply(BACKGROUND)));
+                let next_frame = entrance.frame(Duration::from_secs(9));
+                render_breathing(
+                    &mut canvas,
+                    (width, height),
+                    &font,
+                    scale,
+                    BreathingView {
+                        pattern: &entrance.pattern,
+                        frame: next_frame,
+                        full: false,
+                    },
+                );
+                let mut next_full = vec![0; canvas.len()];
+                render_breathing(
+                    &mut next_full,
+                    (width, height),
+                    &font,
+                    scale,
+                    BreathingView {
+                        pattern: &entrance.pattern,
+                        frame: next_frame,
+                        full: true,
+                    },
+                );
+                assert_eq!(
+                    canvas, next_full,
+                    "no stale strokes, glows, or orb pixels for {family:?}"
+                );
             }
+        }
+    }
+    #[test]
+    fn all_patterns_start_transparent_and_reduced_motion_pixels_stay_still() {
+        let font = super::super::default_font().unwrap();
+        for family in Family::ALL {
+            let entrance = Entrance::new(
+                Settings {
+                    families: vec![family],
+                    reduced_motion: true,
+                    ..Settings::default()
+                },
+                42,
+            );
+            let mut canvas = vec![255; 800 * 600 * 4];
+            let draw = |canvas: &mut [u8], seconds| {
+                render_breathing(
+                    canvas,
+                    (800, 600),
+                    &font,
+                    1.0,
+                    BreathingView {
+                        pattern: &entrance.pattern,
+                        frame: entrance.frame(Duration::from_secs(seconds)),
+                        full: true,
+                    },
+                )
+            };
+            draw(&mut canvas, 0);
+            assert!(canvas.iter().all(|&v| v == 0), "{family:?}");
+            draw(&mut canvas, 3);
+            let first = canvas.clone();
+            draw(&mut canvas, 4);
+            assert_eq!(canvas, first, "{family:?} reduced motion");
         }
     }
     #[test]

@@ -27,9 +27,9 @@ All monitor popups share the same settings and timer. Updates preserve existing 
 
 ## Breathing entrance
 
-Each reminder gently fades in with a fresh seeded geometric pattern: **Radial lattice**, **Nested polygons**, **Constellation**, or **Woven field**. All monitors share the same pattern and breath. By default, one breath (4 seconds in, 6 out) comes before the quote, history, charts, and textbox appear. The full entrance takes 14 seconds; your reflection countdown starts afterward.
+Each reminder gently fades in with a fresh seeded pattern: **Radial lattice**, **Nested polygons**, **Constellation**, **Woven field**, **Ember bloom**, **Moon pool**, or **Glass jelly**. The three organic studies flow gently as they breathe. All monitors share the same pattern and breath. By default, one breath (4 seconds in, 6 out) comes before the quote, history, charts, and textbox appear. The full entrance takes 14 seconds; your reflection countdown starts afterward.
 
-Under **Settings… → Breathing entrance**, switch breathing on/off, choose a pace and one or two breaths, and select the allowed pattern families. Keep at least one selected. **Reduced motion** holds the geometry still with timed breath cues and gentle fades. Typing during the entrance is ignored; **Esc** immediately dismisses all monitors. Existing preferences gain the enabled entrance by default without enabling recurring reminders.
+Under **Settings… → Breathing**, switch breathing on/off, choose a pace and one or two breaths, and select the allowed pattern families. Keep at least one selected. **Reduced motion** holds the geometry still with timed breath cues and gentle fades. Typing during the entrance is ignored; **Esc** immediately dismisses all monitors. New or missing breathing settings include all seven patterns; saved pattern selections are kept. Recurring reminders are never enabled by this update.
 
 ## Activity reflections
 
