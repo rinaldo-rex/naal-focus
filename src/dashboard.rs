@@ -84,12 +84,6 @@ fn clock_12(hour: u32, minute: u32) -> String {
     )
 }
 
-/// Explicit #word vocabulary: alphanumeric plus `_`/`-`, case-insensitive,
-/// duplicate-free per entry. Trailing `-`/`_` is punctuation, stripped.
-pub fn parse_tags(text: &str) -> Vec<String> {
-    crate::metadata::Metadata::parse(text).tags
-}
-
 #[derive(Serialize)]
 struct Payload {
     v: u32,
@@ -465,6 +459,12 @@ fn browser_command(path: &Path) -> Command {
 mod tests {
     use super::*;
     use std::{fs, os::unix::fs::PermissionsExt, path::PathBuf};
+
+    /// Explicit #word vocabulary: alphanumeric plus `_`/`-`, case-insensitive,
+    /// duplicate-free per entry. Trailing `-`/`_` is punctuation, stripped.
+    fn parse_tags(text: &str) -> Vec<String> {
+        crate::metadata::Metadata::parse(text).tags
+    }
 
     struct Temp(PathBuf);
     impl Temp {

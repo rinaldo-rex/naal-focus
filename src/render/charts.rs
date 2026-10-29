@@ -1,5 +1,10 @@
 //! Quiet, noninteractive charts in a band above the existing reflection strip.
-use super::{BACKGROUND, Image, Rect, input_damage, shortened, text_width};
+use super::{
+    BACKGROUND,
+    input::input_damage,
+    primitives::{Image, Rect},
+    text::{shortened, text_width},
+};
 use crate::{
     charts::{DailyCharts, Series},
     config::{ChartSettings, ChartStyle},
@@ -400,7 +405,7 @@ mod tests {
                 let band = chart_damage(width as f32, height as f32, scale, &settings).unwrap();
                 assert!(band.y + band.height < input_damage(width as f32, height as f32, scale).y);
                 let mut pixels = vec![0; width * height * 4];
-                super::super::render_with_charts(
+                super::super::test_helpers::render_with_charts(
                     &mut pixels,
                     (width, height),
                     &font,
@@ -498,7 +503,7 @@ mod tests {
     fn disabled_charts_preserve_the_existing_render_exactly() {
         let font = super::super::default_font().unwrap();
         let mut before = vec![0; 800 * 600 * 4];
-        super::super::render(&mut before, 800, 600, &font, "Notice.", 36.0, 1.0);
+        super::super::test_helpers::render(&mut before, 800, 600, &font, "Notice.", 36.0, 1.0);
         let mut after = before.clone();
         render_charts(
             &mut after,
