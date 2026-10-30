@@ -54,22 +54,50 @@ pub(crate) fn private_dir(directory: &Path) -> Result<File, String> {
     Ok(dir)
 }
 
-pub(crate) fn lock(file: &File) -> Result<(), String> {
-    // SAFETY: a live descriptor; flock has no pointer arguments. Linux supports
-    // advisory locks on directory descriptors as well as regular files.
-    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
-        return Err("Activity history is busy; try again.".into());
+#[derive(Debug)]
+#[must_use = "keep the locked file alive until the operation finishes"]
+pub(crate) struct LockedFile(File);
+
+impl std::ops::Deref for LockedFile {
+    type Target = File;
+
+    fn deref(&self) -> &File {
+        &self.0
     }
-    Ok(())
 }
 
-pub(crate) fn lock_shared(file: &File) -> Result<(), String> {
+impl std::ops::DerefMut for LockedFile {
+    fn deref_mut(&mut self) -> &mut File {
+        &mut self.0
+    }
+}
+
+impl Drop for LockedFile {
+    fn drop(&mut self) {
+        // Forked children can briefly retain CLOEXEC copies; closing alone would
+        // leave a completed operation locked until those copies disappear.
+        // SAFETY: self.0 still owns the descriptor; LOCK_UN has no pointer arguments.
+        unsafe {
+            libc::flock(self.0.as_raw_fd(), libc::LOCK_UN);
+        }
+    }
+}
+
+pub(crate) fn lock(file: File) -> Result<LockedFile, String> {
+    lock_with(file, libc::LOCK_EX)
+}
+
+pub(crate) fn lock_shared(file: File) -> Result<LockedFile, String> {
+    lock_with(file, libc::LOCK_SH)
+}
+
+fn lock_with(file: File, mode: libc::c_int) -> Result<LockedFile, String> {
     // SAFETY: a live descriptor; flock has no pointer arguments. Linux supports
     // advisory locks on directory descriptors as well as regular files.
-    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_SH | libc::LOCK_NB) } != 0 {
+    if unsafe { libc::flock(file.as_raw_fd(), mode | libc::LOCK_NB) } != 0 {
         return Err("Activity history is busy; try again.".into());
     }
-    Ok(())
+    Ok(LockedFile(file))
 }
 
 pub(crate) fn open_at(dir: &File, name: &CStr, flags: libc::c_int) -> Result<File, std::io::Error> {
@@ -230,28 +258,79 @@ mod tests {
     }
 
     #[test]
+    fn completed_operations_release_locks_despite_copied_descriptors() {
+        for regular_file in [false, true] {
+            for shared in [false, true] {
+                let temp = Temp::new();
+                let path = temp.0.join("history");
+                if regular_file {
+                    fs::write(&path, b"fixture").unwrap();
+                } else {
+                    fs::create_dir(&path).unwrap();
+                }
+                let file = File::open(&path).unwrap();
+                let owner = if shared {
+                    lock_shared(file)
+                } else {
+                    lock(file)
+                }
+                .unwrap();
+                // Mirrors the descriptor copy that exists between fork and exec.
+                let inherited = owner.try_clone().unwrap();
+                let contender = File::open(&path).unwrap();
+                assert!(lock(contender.try_clone().unwrap()).is_err());
+                drop(owner);
+                assert!(
+                    lock(contender).is_ok(),
+                    "a finished operation stayed busy because a descriptor copy survived"
+                );
+                drop(inherited);
+            }
+        }
+    }
+
+    #[test]
+    fn releasing_one_reader_preserves_other_readers_despite_copied_descriptors() {
+        let temp = Temp::new();
+        let first = lock_shared(File::open(&temp.0).unwrap()).unwrap();
+        let second = lock_shared(File::open(&temp.0).unwrap()).unwrap();
+        let inherited = first.try_clone().unwrap();
+        let writer = File::open(&temp.0).unwrap();
+        drop(first);
+        assert!(
+            lock(writer.try_clone().unwrap()).is_err(),
+            "the second reader must remain protected"
+        );
+        drop(second);
+        assert!(
+            lock(writer).is_ok(),
+            "a descriptor copy must not prolong a completed reader's lock"
+        );
+        drop(inherited);
+    }
+
+    #[test]
     fn directory_locks_share_reads_and_refuse_conflicting_access() {
         let temp = Temp::new();
         let shared_path = temp.0.join("shared");
         let writer = private_dir(&shared_path).unwrap();
         let first = existing_dir(&shared_path).unwrap().unwrap();
         let second = existing_dir(&shared_path).unwrap().unwrap();
-        lock_shared(&first).unwrap();
-        lock_shared(&second).unwrap();
+        let _first = lock_shared(first).unwrap();
+        let _second = lock_shared(second).unwrap();
         assert_eq!(
-            lock(&writer).unwrap_err(),
+            lock(writer).unwrap_err(),
             "Activity history is busy; try again."
         );
         let exclusive_path = temp.0.join("exclusive");
-        let owner = private_dir(&exclusive_path).unwrap();
-        lock(&owner).unwrap();
+        let _owner = lock(private_dir(&exclusive_path).unwrap()).unwrap();
         let contender = existing_dir(&exclusive_path).unwrap().unwrap();
         assert_eq!(
-            lock(&contender).unwrap_err(),
+            lock(contender.try_clone().unwrap()).unwrap_err(),
             "Activity history is busy; try again."
         );
         assert_eq!(
-            lock_shared(&contender).unwrap_err(),
+            lock_shared(contender).unwrap_err(),
             "Activity history is busy; try again."
         );
     }
@@ -259,8 +338,7 @@ mod tests {
     #[test]
     fn replacement_preserves_old_readers_and_the_directory_lock() {
         let temp = Temp::new();
-        let dir = private_dir(&temp.0).unwrap();
-        lock(&dir).unwrap();
+        let dir = lock(private_dir(&temp.0).unwrap()).unwrap();
         let path = temp.0.join("target");
         fs::write(&path, b"old").unwrap();
         let mut reader = File::open(&path).unwrap();
@@ -283,7 +361,7 @@ mod tests {
         assert_eq!(fs::metadata(&path).unwrap().mode() & 0o777, 0o600);
         let contender = existing_dir(&temp.0).unwrap().unwrap();
         assert_eq!(
-            lock_shared(&contender).unwrap_err(),
+            lock_shared(contender).unwrap_err(),
             "Activity history is busy; try again."
         );
         drop(scratch);

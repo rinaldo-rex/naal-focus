@@ -150,10 +150,9 @@ fn persist_in(directory: &Path, original: Option<&Entry>, entry: &Entry) -> Resu
     }
     let mut bytes = serde_json::to_vec(entry).map_err(|e| e.to_string())?;
     bytes.push(b'\n');
-    let dir = private_dir(directory)?;
     // The directory lock remains stable when corrections replace activity.jsonl.
-    lock(&dir)?;
-    let mut file = open_at(
+    let dir = lock(private_dir(directory)?)?;
+    let file = open_at(
         &dir,
         c"activity.jsonl",
         libc::O_RDWR | libc::O_CREAT | libc::O_APPEND,
@@ -166,11 +165,11 @@ fn persist_in(directory: &Path, original: Option<&Entry>, entry: &Entry) -> Resu
     }
     file.set_permissions(fs::Permissions::from_mode(0o600))
         .map_err(|e| e.to_string())?;
-    lock(&file)?;
+    let mut file = lock(file)?;
     let original_len = file.metadata().map_err(|e| e.to_string())?.len();
     let mut found = None;
     file.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;
-    let mut reader = BufReader::new(&mut file);
+    let mut reader = BufReader::new(&mut *file);
     while let Some((_, record)) = read_record(&mut reader)? {
         if record.id == entry.id {
             if found.is_some() {
@@ -221,8 +220,8 @@ pub(crate) fn load_lenient_matching(
     let Some(dir) = existing_dir(directory)? else {
         return Ok((Vec::new(), 0));
     };
-    lock_shared(&dir)?;
-    let mut file = match open_at(&dir, c"activity.jsonl", libc::O_RDONLY) {
+    let dir = lock_shared(dir)?;
+    let file = match open_at(&dir, c"activity.jsonl", libc::O_RDONLY) {
         Ok(file) => file,
         // A missing history is an empty history, not a read error.
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok((Vec::new(), 0)),
@@ -232,12 +231,12 @@ pub(crate) fn load_lenient_matching(
     if !file.metadata().map_err(|e| e.to_string())?.is_file() {
         return Err("Activity history must be a regular file.".into());
     }
-    lock_shared(&file)?;
+    let mut file = lock_shared(file)?;
     file.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;
     let mut entries = Vec::new();
     let mut skipped = 0;
     let mut seen = HashSet::new();
-    let mut inner = BufReader::new(&file);
+    let mut inner = BufReader::new(&*file);
     let reader = &mut inner;
     loop {
         let mut line = Vec::new();
@@ -507,8 +506,7 @@ mod tests {
             .is_err()
         );
         assert_eq!(fs::read(&path).unwrap(), before);
-        let dir_lock = File::open(&temp.0).unwrap();
-        lock(&dir_lock).unwrap();
+        let _dir_lock = lock(File::open(&temp.0).unwrap()).unwrap();
         assert!(append_in(&temp.0, &entry("New")).is_err());
         assert!(
             persist_in(
@@ -767,7 +765,7 @@ mod tests {
         let dir = temp.0.join("history");
         append_in(&dir, &entry("Reading")).unwrap();
         let writer = File::open(&dir).unwrap();
-        lock(&writer).unwrap();
+        let writer = lock(writer).unwrap();
         assert!(load_lenient(&dir).is_err());
         drop(writer);
         let target = temp.0.join("target");

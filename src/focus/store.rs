@@ -32,7 +32,7 @@ pub fn load_today_in(directory: &Path, now_ms: u64) -> Result<Day, String> {
     let Some(dir) = private_fs::existing_dir(directory)? else {
         return Ok(Day::empty(now_ms));
     };
-    private_fs::lock(&dir)?;
+    let dir = private_fs::lock(dir)?;
     // A crash between writing and renaming must not leave a hidden archive of
     // titles. Only our reserved, owner-checked regular scratch files are removed.
     let mut removed_scratch = false;
@@ -97,8 +97,7 @@ pub fn save_in(directory: &Path, day: &Day, now_ms: u64) -> Result<(), String> {
     if bytes.len() as u64 > MAX_BYTES {
         return Err("Today's focus history is full.".into());
     }
-    let dir = private_fs::private_dir(directory)?;
-    private_fs::lock(&dir)?;
+    let dir = private_fs::lock(private_fs::private_dir(directory)?)?;
     match private_fs::open_at(&dir, NAME, libc::O_RDONLY) {
         Ok(file) => check_file(&file)?,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
@@ -223,7 +222,7 @@ mod tests {
         assert!(load_today_in(&temp.0, NOW + 2000).is_err());
         fs::remove_dir(&path).unwrap();
         let dir = private_fs::private_dir(&temp.0).unwrap();
-        private_fs::lock(&dir).unwrap();
+        let _dir = private_fs::lock(dir).unwrap();
         assert!(save_in(&temp.0, &day(), NOW + 2000).is_err());
         assert_eq!(fs::read(&target).unwrap(), b"untouched");
     }

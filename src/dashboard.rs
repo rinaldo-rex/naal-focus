@@ -369,7 +369,7 @@ fn escape_for_script(json: &str) -> String {
 /// exactly like `activity.jsonl`. Replaces any earlier generation in place.
 fn write_private(directory: &Path, html: &str) -> Result<(), String> {
     let dir = private_fs::private_dir(directory)?;
-    private_fs::lock(&dir)?;
+    let dir = private_fs::lock(dir)?;
     let file = private_fs::open_at(&dir, c"dashboard.html", libc::O_WRONLY | libc::O_CREAT)
         .map_err(|e| format!("Dashboard output is unwritable: {e}"))?;
     private_fs::check_owner(&file)?;
@@ -379,8 +379,7 @@ fn write_private(directory: &Path, html: &str) -> Result<(), String> {
     }
     file.set_permissions(Permissions::from_mode(0o600))
         .map_err(|e| e.to_string())?;
-    private_fs::lock(&file)?;
-    let mut file = file;
+    let mut file = private_fs::lock(file)?;
     file.set_len(0).map_err(|e| e.to_string())?;
     file.write_all(html.as_bytes()).map_err(|e| e.to_string())?;
     file.sync_all().map_err(|e| e.to_string())?;

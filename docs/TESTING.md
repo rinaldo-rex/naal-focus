@@ -8,8 +8,6 @@ cargo test --locked # Core/helper tests without the applet UI library
 just probe          # Read-only desktop, output, and safety check
 ```
 
-Parallel runs can occasionally report `Activity history is busy`. Retry with `RUST_TEST_THREADS=1 just check`.
-
 The probe opens no reminder and collects no window titles. Read its printed guard status as well as its exit code.
 
 ## Offline browser checks
