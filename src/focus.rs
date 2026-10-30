@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, time::Duration};
 
 pub mod store;
+#[cfg(target_os = "linux")]
 pub mod tracker;
 
 pub const MAX_SESSIONS: usize = 20_000;

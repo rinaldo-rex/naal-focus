@@ -59,16 +59,27 @@ pub(super) fn shortened(font: &Font, text: &str, size: f32, max_width: f32) -> S
 }
 
 pub fn default_font() -> Result<Font, String> {
-    for path in [
+    #[cfg(target_os = "macos")]
+    let paths = [
+        "/System/Library/Fonts/Supplemental/Arial.ttf",
+        "/System/Library/Fonts/Supplemental/Verdana.ttf",
+        "/System/Library/Fonts/Helvetica.ttc",
+    ];
+    #[cfg(not(target_os = "macos"))]
+    let paths = [
         "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
         "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
-    ] {
+    ];
+    for path in paths {
         if let Ok(bytes) = std::fs::read(path)
             && let Ok(font) = Font::from_bytes(bytes, fontdue::FontSettings::default())
         {
             return Ok(font);
         }
     }
-    Err("Install fonts-liberation, fonts-dejavu-core, or fonts-noto-core; no supported sans-serif font was found.".into())
+    Err(format!(
+        "No supported sans-serif font was found; tried {}.",
+        paths.join(", ")
+    ))
 }

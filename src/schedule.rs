@@ -1,7 +1,7 @@
 use crate::config::Settings;
 use std::time::Duration;
 
-/// Pure scheduling policy. Time is CLOCK_BOOTTIME, so it includes suspend.
+/// Pure scheduling policy. Its monotonic clock must include suspend.
 #[derive(Debug)]
 pub struct Schedule {
     next: Duration,

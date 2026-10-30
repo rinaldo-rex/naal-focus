@@ -1,5 +1,5 @@
 //! Real settings-process regression on an isolated bus/runtime. No overlays.
-#![cfg(feature = "applet")]
+#![cfg(all(target_os = "linux", feature = "applet"))]
 use naal_focus::{
     config::{self, Settings},
     engine::{CONTROL_SERVICE, Engine, Request},

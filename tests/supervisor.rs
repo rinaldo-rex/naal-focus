@@ -1,4 +1,5 @@
 //! Native integration: three clients share one supervisor. Never shows overlays.
+#![cfg(target_os = "linux")]
 use naal_focus::{
     config::{self, Settings},
     engine::{CONTROL_SERVICE, Engine, Request},
