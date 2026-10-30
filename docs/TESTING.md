@@ -54,7 +54,9 @@ From Linux, `cargo clippy --locked --target aarch64-apple-darwin --features appl
 
 Native settings checks cover 800×600, 1000×660, and 1400×900 windows. The Mac settings preview uses `naal-focus --preview-settings /absolute/output` without showing a window or taking focus. Review those real native captures before updating the app guide. Its Mac settings screenshot comes from CI; earlier reminder screenshots remain COSMIC-only.
 
-The `.github/workflows/macos.yml` workflow runs on an Apple Silicon macOS 14 runner when this feature branch is pushed or a pull request targets main. It checks Rust 1.93 formatting/lints, core tests, hidden native settings, and startup watchdog recovery, then packages an ad-hoc-signed app. No overlay is opened. The downloadable artifact contains the app ZIP and real native settings captures, retained for seven days. Private-repository jobs consume the account’s Actions allowance; no signing secrets or notarization are configured.
+The `.github/workflows/macos.yml` workflow runs on an Apple Silicon macOS 14 runner when this feature branch is pushed or a pull request targets main. It checks Rust 1.93 formatting/lints, core tests, hidden native settings, and startup watchdog recovery, then packages an ad-hoc-signed app. No overlay is opened. The downloadable artifact contains the app ZIP, SHA-256 checksum, standalone installer, and real native settings captures, retained for seven days. Private-repository jobs consume the account’s Actions allowance; no signing secrets or notarization are configured.
+
+On a Mac, `just check-macos-installer` checks streamed installation, safe replacement, rejected downloads, and rollback in temporary folders. Downloads are mocked; no app is launched and no real settings or installed app are touched. The workflow runs these checks before uploading the artifact.
 
 ### Live Mac acceptance
 

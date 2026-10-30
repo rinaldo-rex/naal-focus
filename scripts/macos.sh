@@ -22,7 +22,7 @@ check_existing() {
 case "$action" in
     uninstall)
         check_existing
-        rm -rf -- "$destination/$name"
+        rm -rf -- "${destination:?}/${name:?}"
         printf 'Removed app; settings and history kept.\n'
         exit 0
         ;;
@@ -36,8 +36,9 @@ mkdir -p "$destination"
 work=$(mktemp -d "$destination/.naal-focus.XXXXXX")
 trap 'rm -rf -- "$work"' EXIT
 app="$work/$name"
-mkdir -p "$app/Contents/MacOS"
+mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 install -m 755 "$binary" "$app/Contents/MacOS/naal-focus"
+install -m 644 "$root/LICENSE" "$app/Contents/Resources/LICENSE"
 version=$("$binary" --version)
 version=${version##* }
 template=$(< "$root/data/macos/Info.plist")
@@ -48,6 +49,8 @@ printf '%s\n' "${template//@VERSION@/$version}" > "$app/Contents/Info.plist"
 /usr/bin/codesign --verify --strict "$app"
 if [[ $action == bundle ]]; then
     /usr/bin/ditto -c -k --sequesterRsrc --keepParent "$app" "$destination/Naal-Focus-macOS.zip"
+    (cd -- "$destination" && shasum -a 256 Naal-Focus-macOS.zip > Naal-Focus-macOS.zip.sha256)
+    install -m 755 "$root/scripts/install-macos.sh" "$destination/install-macos.sh"
     printf 'Experimental test build: %s/Naal-Focus-macOS.zip\n' "$destination"
     printf 'Ad-hoc signed only; macOS may require explicit approval to open.\n'
 else

@@ -13,7 +13,8 @@ check:
     cargo fmt --check
     cargo clippy --locked --features applet --all-targets -- -D warnings
     cargo test --locked --features applet
-    bash -n scripts/*.sh
+    for script in scripts/*.sh; do bash -n "$script"; done
+    sh -n scripts/install-macos.sh
 
 # Offline guide/dashboard checks in a separate, temporary headless Chrome.
 check-web:
@@ -63,6 +64,9 @@ once: build
 
 bundle-macos output=(justfile_directory() + "/target/macos"): release
     ./scripts/macos.sh bundle "{{output}}"
+
+check-macos-installer: bundle-macos
+    ./scripts/test-macos-installer.sh "{{justfile_directory()}}/target/macos"
 
 install prefix=install-prefix: release
     {{ if os() == "macos" { "./scripts/macos.sh install" } else { "./scripts/install.sh" } }} "{{prefix}}"

@@ -26,7 +26,15 @@ Use `just install /absolute/prefix` for a different install location.
 
 For Apple Silicon Macs running macOS 14+. Includes menu-bar controls, multi-monitor reminders, breathing, and settings. Reflections, charts, window history, and the dashboard are Coming soon. Live safety testing is still required; see [testing](docs/TESTING.md).
 
-On a Mac, install Xcode Command Line Tools (`xcode-select --install`), Rust 1.93+, and `just`, then run:
+Once the repository and preview release are public, install the prebuilt app without build tools:
+
+```sh
+curl -fsSL https://github.com/rinaldo-rex/naal-focus/releases/download/v0.9.0-macos-preview.1/install-macos.sh | sh
+```
+
+The installer checks the ZIP checksum and app signature, installs into `~/Applications`, and does not launch the app. No `sudo` or GitHub login is needed. Open **Naal Focus** from that folder when ready.
+
+To build from source instead, install Xcode Command Line Tools (`xcode-select --install`), Rust 1.93+, and `just`, then run:
 
 ```sh
 just bundle-macos   # target/macos/Naal-Focus-macOS.zip
@@ -35,11 +43,13 @@ just install        # ~/Applications/Naal Focus.app; does not launch it
 
 Quit the app before updating. Test builds are ad-hoc signed, not notarized; macOS may block opening a downloaded copy. Approve it through macOS only if you trust the build. No Apple account, login item, or tracking permission is needed for this prototype.
 
-The [Mac workflow](.github/workflows/macos.yml) builds and tests on Apple Silicon and provides the test app plus demo settings captures as a downloadable artifact. CI verifies builds and automated checks, not live reminder safety.
+The [Mac workflow](.github/workflows/macos.yml) builds and tests on Apple Silicon. Its temporary artifact contains the app ZIP, checksum, installer, and demo settings captures; a published preview release provides the lasting download. CI verifies builds and automated checks, not live reminder safety.
 
 ## Uninstall
 
-On Linux, remove the applet from the dock/panel first. On Mac, quit the app. Then run:
+On Mac, quit the app and move `~/Applications/Naal Focus.app` to the Trash. Settings are kept.
+
+For source installations on either platform, use the command below. On Linux, remove the applet from the dock/panel first; on Mac, quit the app.
 
 ```sh
 just uninstall

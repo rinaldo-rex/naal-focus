@@ -32,7 +32,8 @@ jobs:
         run: |
           cargo fmt --check
           cargo clippy --locked --features applet --all-targets -- -D warnings
-          bash -n scripts/*.sh
+          for script in scripts/*.sh; do bash -n "$script"; done
+          sh -n scripts/install-macos.sh
       - name: Core, native settings, and watchdog tests (no reminders)
         run: cargo test --locked --features applet --no-fail-fast
       - name: Capture demo settings (no reminders)
@@ -42,11 +43,15 @@ jobs:
           cargo build --locked --release --features applet --bin naal-focus
           ./scripts/macos.sh bundle "$PWD/target/macos"
           /usr/bin/unzip -t target/macos/Naal-Focus-macOS.zip
+      - name: Installer checks (offline; no app launch)
+        run: ./scripts/test-macos-installer.sh "$PWD/target/macos"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: naal-focus-macos-apple-silicon
           path: |
             target/macos/Naal-Focus-macOS.zip
+            target/macos/Naal-Focus-macOS.zip.sha256
+            target/macos/install-macos.sh
             target/macos-previews/
           if-no-files-found: error
           retention-days: 7
