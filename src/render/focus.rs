@@ -438,11 +438,7 @@ mod tests {
         render::{self, OverlayView},
     };
     fn font() -> Font {
-        Font::from_bytes(
-            std::fs::read("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf").unwrap(),
-            fontdue::FontSettings::default(),
-        )
-        .unwrap()
+        render::default_font().unwrap()
     }
     fn snapshot() -> Snapshot {
         let now = 1_792_000_000_000;

@@ -36,15 +36,12 @@ pub fn load_today_in(directory: &Path, now_ms: u64) -> Result<Day, String> {
     // A crash between writing and renaming must not leave a hidden archive of
     // titles. Only our reserved, owner-checked regular scratch files are removed.
     let mut removed_scratch = false;
-    for entry in std::fs::read_dir(format!("/proc/self/fd/{}", dir.as_raw_fd()))
-        .map_err(|e| e.to_string())?
-    {
-        let name = entry.map_err(|e| e.to_string())?.file_name();
-        let Some(name) = name.to_str() else { continue };
-        if !name.starts_with(".focus-") || !name.ends_with(".tmp") {
+    for name in private_fs::entries(&dir).map_err(|e| e.to_string())? {
+        let name = name.map_err(|e| e.to_string())?;
+        let bytes = name.as_bytes();
+        if !bytes.starts_with(b".focus-") || !bytes.ends_with(b".tmp") {
             continue;
         }
-        let name = CString::new(name).map_err(|e| e.to_string())?;
         let file = private_fs::open_at(&dir, &name, libc::O_RDONLY).map_err(|e| e.to_string())?;
         check_file(&file)?;
         // SAFETY: live directory descriptor and checked NUL-terminated name.

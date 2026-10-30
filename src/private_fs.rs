@@ -3,7 +3,7 @@ use std::{
     ffi::{CStr, CString, OsString},
     fs::{DirBuilder, File, OpenOptions},
     os::{
-        fd::{AsRawFd, FromRawFd},
+        fd::{AsRawFd, FromRawFd, IntoRawFd},
         unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt},
     },
     path::{Path, PathBuf},
@@ -117,6 +117,71 @@ pub(crate) fn open_at(dir: &File, name: &CStr, flags: libc::c_int) -> Result<Fil
     Ok(unsafe { File::from_raw_fd(fd) })
 }
 
+pub(crate) struct DirectoryEntries {
+    stream: std::ptr::NonNull<libc::DIR>,
+    finished: bool,
+}
+
+pub(crate) fn entries(directory: &File) -> Result<DirectoryEntries, std::io::Error> {
+    // A fresh open description avoids sharing/reusing the caller’s directory offset.
+    let fd = open_at(directory, c".", libc::O_RDONLY | libc::O_DIRECTORY)?.into_raw_fd();
+    // SAFETY: fd is a newly owned readable directory. Success transfers ownership to DIR.
+    let stream = unsafe { libc::fdopendir(fd) };
+    let Some(stream) = std::ptr::NonNull::new(stream) else {
+        let error = std::io::Error::last_os_error();
+        // SAFETY: fdopendir failed without taking ownership.
+        unsafe {
+            libc::close(fd);
+        }
+        return Err(error);
+    };
+    Ok(DirectoryEntries {
+        stream,
+        finished: false,
+    })
+}
+
+impl Iterator for DirectoryEntries {
+    type Item = Result<CString, std::io::Error>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.finished {
+            return None;
+        }
+        loop {
+            // SAFETY: errno is thread-local; this iterator exclusively owns a live DIR.
+            let (entry, error) = unsafe {
+                #[cfg(target_os = "linux")]
+                let errno = libc::__errno_location();
+                #[cfg(target_os = "macos")]
+                let errno = libc::__error();
+                *errno = 0;
+                let entry = libc::readdir(self.stream.as_ptr());
+                (entry, *errno)
+            };
+            if entry.is_null() {
+                self.finished = true;
+                return (error != 0).then(|| Err(std::io::Error::from_raw_os_error(error)));
+            }
+            // SAFETY: readdir guarantees a terminated name, valid until the next call.
+            // Copy before advancing; filenames need not be valid UTF-8.
+            let name = unsafe { CStr::from_ptr((*entry).d_name.as_ptr()) }.to_owned();
+            if name.as_c_str() != c"." && name.as_c_str() != c".." {
+                return Some(Ok(name));
+            }
+        }
+    }
+}
+
+impl Drop for DirectoryEntries {
+    fn drop(&mut self) {
+        // SAFETY: the owned stream is closed exactly once; it also closes its descriptor.
+        unsafe {
+            libc::closedir(self.stream.as_ptr());
+        }
+    }
+}
+
 pub(crate) fn check_owner(file: &File) -> Result<(), String> {
     // SAFETY: geteuid takes no arguments and has no preconditions.
     if file.metadata().map_err(|e| e.to_string())?.uid() != unsafe { libc::geteuid() } {
@@ -203,6 +268,35 @@ mod tests {
             directory_from_home(Some("/tmp/demo-home".into())).unwrap(),
             Path::new("/tmp/demo-home/.naal-focus")
         );
+    }
+
+    #[test]
+    fn directory_enumeration_stays_anchored_and_repeated_reads_start_fresh() {
+        use std::os::unix::ffi::OsStringExt;
+        let temp = Temp::new();
+        let path = temp.0.join("original");
+        let dir = private_dir(&path).unwrap();
+        fs::write(path.join("saved"), b"original").unwrap();
+        fs::write(path.join(OsString::from_vec(vec![0xff])), b"non-UTF-8").unwrap();
+        fs::rename(&path, temp.0.join("moved")).unwrap();
+        fs::create_dir(&path).unwrap();
+        fs::write(path.join("replacement"), b"not original").unwrap();
+        for _ in 0..2 {
+            let mut names = entries(&dir)
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
+            names.sort();
+            assert_eq!(
+                names,
+                vec![
+                    CString::new("saved").unwrap(),
+                    CString::new(vec![0xff]).unwrap()
+                ]
+            );
+        }
+        let file = File::open(path.join("replacement")).unwrap();
+        assert!(entries(&file).is_err());
     }
 
     #[test]
