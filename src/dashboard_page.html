@@ -562,7 +562,7 @@ button.linklike { border: 0; background: none; color: inherit; font: inherit; pa
   }
 
   function monthShift(mkey, delta) {
-    const [y, m] = parts(mkey + "-01");
+    const { y, m } = parts(mkey + "-01");
     const t = new Date(Date.UTC(y, m - 1 + delta, 1));
     return `${t.getUTCFullYear()}-${String(t.getUTCMonth() + 1).padStart(2, "0")}`;
   }

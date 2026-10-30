@@ -1,6 +1,6 @@
 //! Opt-in foreground-window time. This measures window activation, not attention.
 //! Only the current local day is retained; missing observations are gaps, never work.
-use crate::dashboard::{Local, to_local};
+use crate::time::to_local;
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, time::Duration};
 
@@ -11,10 +11,6 @@ pub const MAX_SESSIONS: usize = 20_000;
 pub const MAX_TITLE_CHARS: usize = 256;
 pub const MAX_APP_CHARS: usize = 128;
 pub const MAX_BYTES: u64 = 32 * 1024 * 1024;
-
-pub fn day_key(local: Local) -> String {
-    format!("{:04}-{:02}-{:02}", local.year, local.month, local.day)
-}
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -74,13 +70,13 @@ impl Day {
     pub fn empty(now_ms: u64) -> Self {
         Self {
             version: 1,
-            date: day_key(to_local(now_ms)),
+            date: to_local(now_ms).date_key(),
             observed_ms: now_ms,
             sessions: Vec::new(),
         }
     }
     pub fn advance_day(&mut self, now_ms: u64) -> bool {
-        if self.date == day_key(to_local(now_ms)) {
+        if self.date == to_local(now_ms).date_key() {
             false
         } else {
             *self = Self::empty(now_ms);
@@ -102,8 +98,8 @@ impl Day {
                     > (session.end_ms - session.start_ms)
                         .saturating_add(1000)
                         .saturating_add((session.end_ms - session.start_ms) / 1000)
-                || day_key(to_local(session.start_ms)) != self.date
-                || day_key(to_local(session.end_ms.saturating_sub(1))) != self.date
+                || to_local(session.start_ms).date_key() != self.date
+                || to_local(session.end_ms.saturating_sub(1)).date_key() != self.date
             {
                 return Err("Invalid focus history; recording is unavailable.".into());
             }

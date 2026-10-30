@@ -22,7 +22,8 @@ pub fn run_settings() -> Result<(), Box<dyn Error>> {
                                 .min_width(760.0)
                                 .min_height(480.0),
                         )
-                        .exit_on_close(true),
+                        // Let the draft guard resolve close requests before teardown.
+                        .exit_on_close(false),
                     super::Flags { standalone: true },
                 )?;
                 return Ok(());

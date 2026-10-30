@@ -1,6 +1,8 @@
 //! Settings drafts stay local until an explicit, successful shared save.
-use crate::config::{self, ChartSettings, FocusSettings, Settings};
+use super::SettingsMessage;
+use crate::config::{self, ChartSettings, FocusSettings, Settings, limits};
 use cosmic::widget;
+use std::ops::RangeInclusive;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Page {
@@ -101,16 +103,17 @@ impl TimeInput {
         }
     }
 
-    pub fn parse(&self, name: &str, min: u64, max: u64) -> Result<u64, String> {
+    pub fn parse(&self, name: &str, range: RangeInclusive<u64>) -> Result<u64, String> {
         let minutes = self.minutes.parse::<u64>();
         let seconds = self.seconds.parse::<u64>();
         if let (Ok(minutes), Ok(seconds)) = (minutes, seconds)
             && seconds < 60
             && let Some(total) = minutes.checked_mul(60).and_then(|m| m.checked_add(seconds))
-            && (min..=max).contains(&total)
+            && range.contains(&total)
         {
             return Ok(total);
         }
+        let (min, max) = range.into_inner();
         Err(format!(
             "{name}: use whole minutes and 0–59 seconds ({min}–{max} seconds total)."
         ))
@@ -120,11 +123,23 @@ impl TimeInput {
 /// Live per-field message for one numeric settings input, matching the
 /// ranges enforced by [`Settings::validate`]. `None` means the draft value
 /// can be saved.
-pub fn numeric_field_error(value: &str, min: u64, max: u64) -> Option<String> {
+pub fn numeric_field_error(value: &str, range: RangeInclusive<u64>) -> Option<String> {
     match value.trim().parse::<u64>() {
-        Ok(number) if (min..=max).contains(&number) => None,
-        _ => Some(format!("Must be a whole number from {min} to {max}.")),
+        Ok(number) if range.contains(&number) => None,
+        _ => {
+            let (min, max) = range.into_inner();
+            Some(format!("Must be a whole number from {min} to {max}."))
+        }
     }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) enum CloseState {
+    #[default]
+    Open,
+    Confirm,
+    Saving,
+    Ready,
 }
 
 pub(super) struct SettingsForm {
@@ -140,6 +155,7 @@ pub(super) struct SettingsForm {
     pub quotes: widget::text_editor::Content<cosmic::Renderer>,
     pub error: Option<String>,
     pub dirty: bool,
+    pub close: CloseState,
     pending_save: Option<Settings>,
 }
 
@@ -160,8 +176,85 @@ impl SettingsForm {
             )),
             error: None,
             dirty: false,
+            close: CloseState::Open,
             pending_save: None,
         }
+    }
+
+    pub fn update(&mut self, message: SettingsMessage, settings: &Settings) -> Option<Settings> {
+        match message {
+            SettingsMessage::RequestClose => {
+                if self.close == CloseState::Open {
+                    self.close =
+                        if self.dirty && self.candidate(settings).as_ref().ok() != Some(settings) {
+                            CloseState::Confirm
+                        } else {
+                            CloseState::Ready
+                        };
+                }
+                return None;
+            }
+            SettingsMessage::KeepEditing => {
+                self.close = CloseState::Open;
+                return None;
+            }
+            SettingsMessage::Discard => {
+                if self.close == CloseState::Confirm {
+                    self.close = CloseState::Ready;
+                }
+                return None;
+            }
+            SettingsMessage::SaveAndClose => {
+                if self.close != CloseState::Confirm {
+                    return None;
+                }
+                let saved = self.save(settings).ok()?;
+                self.close = CloseState::Saving;
+                return Some(saved);
+            }
+            SettingsMessage::IntervalMinutes(text) => self.interval.minutes = text,
+            SettingsMessage::IntervalSeconds(text) => self.interval.seconds = text,
+            SettingsMessage::Duration(text) => self.duration = text,
+            SettingsMessage::TypingMinutes(text) => self.typing_limit.minutes = text,
+            SettingsMessage::TypingSeconds(text) => self.typing_limit.seconds = text,
+            SettingsMessage::ReflectionsEnabled(enabled) => self.reflections_enabled = enabled,
+            SettingsMessage::TextSize(text) => self.text_size = text,
+            SettingsMessage::IdleMinutes(text) => self.idle_secs.minutes = text,
+            SettingsMessage::IdleSeconds(text) => self.idle_secs.seconds = text,
+            SettingsMessage::ChartStyle(style) => self.charts.style = style,
+            SettingsMessage::ChartProjects(enabled) => self.charts.projects = enabled,
+            SettingsMessage::ChartFeelings(enabled) => self.charts.feelings = enabled,
+            SettingsMessage::ChartTags(enabled) => self.charts.tags = enabled,
+            SettingsMessage::FocusEnabled(enabled) => self.focus.enabled = enabled,
+            SettingsMessage::FocusStyle(style) => self.focus.style = style,
+            SettingsMessage::FocusSide(side) => self.focus.side = side,
+            SettingsMessage::Focus24Hour(enabled) => self.focus.use_24_hour_time = enabled,
+            SettingsMessage::BreathingEnabled(enabled) => self.breathing.enabled = enabled,
+            SettingsMessage::BreathingReducedMotion(enabled) => {
+                self.breathing.reduced_motion = enabled
+            }
+            SettingsMessage::BreathingPace(pace) => self.breathing.pace = pace,
+            SettingsMessage::BreathingCycles(cycles) => {
+                if !crate::breathing::Settings::CYCLES.contains(&cycles) {
+                    return None;
+                }
+                self.breathing.cycles = cycles;
+            }
+            SettingsMessage::BreathingFamily(family, enabled) => {
+                self.breathing.families.retain(|f| *f != family);
+                if enabled {
+                    self.breathing.families.push(family);
+                }
+            }
+            SettingsMessage::Quotes(action) => {
+                self.dirty |= action.is_edit();
+                self.quotes.perform(action);
+                return None;
+            }
+            SettingsMessage::Save => return self.save(settings).ok(),
+        }
+        self.dirty = true;
+        None
     }
 
     pub fn sync(&mut self, settings: &Settings, error: Option<&str>) -> bool {
@@ -169,7 +262,17 @@ impl SettingsForm {
             self.pending_save = None;
             // Typing after Save must not be erased by its later acknowledgment.
             self.dirty = self.candidate(settings).as_ref().ok() != Some(settings);
+            if matches!(self.close, CloseState::Confirm | CloseState::Saving) {
+                self.close = if self.dirty {
+                    CloseState::Confirm
+                } else {
+                    CloseState::Ready
+                };
+            }
             return true;
+        }
+        if error.is_some() && self.close == CloseState::Saving {
+            self.close = CloseState::Confirm;
         }
         if !self.dirty {
             // Avoid rebuilding the editor and losing its cursor on every tick.
@@ -178,6 +281,11 @@ impl SettingsForm {
             }
         }
         false
+    }
+
+    pub fn can_auto_save(&self) -> bool {
+        // Losing focus at the close prompt must not bypass the Discard choice.
+        self.dirty && self.close == CloseState::Open
     }
 
     pub fn save(&mut self, settings: &Settings) -> Result<Settings, String> {
@@ -202,17 +310,19 @@ impl SettingsForm {
 
     fn candidate(&self, settings: &Settings) -> Result<Settings, String> {
         let candidate = Settings {
-            interval_secs: self.interval.parse("Reminders", 15, 86_400)?,
+            interval_secs: self.interval.parse("Reminders", limits::INTERVAL_SECS)?,
             duration_secs: self
                 .duration
                 .parse()
                 .map_err(|_| "Duration needs an integer.")?,
-            typing_limit_secs: self.typing_limit.parse("Reflections", 30, 600)?,
+            typing_limit_secs: self
+                .typing_limit
+                .parse("Reflections", limits::TYPING_LIMIT_SECS)?,
             text_size: self
                 .text_size
                 .parse()
                 .map_err(|_| "Text size needs an integer.")?,
-            idle_secs: self.idle_secs.parse("Idle threshold", 30, 3_600)? as u32,
+            idle_secs: self.idle_secs.parse("Idle threshold", limits::IDLE_SECS)? as u32,
             reflections_enabled: self.reflections_enabled,
             charts: self.charts.clone(),
             focus: self.focus.clone(),
@@ -229,6 +339,305 @@ impl SettingsForm {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn close_is_immediate_only_for_unchanged_settings() {
+        let original = Settings::default();
+        let mut form = SettingsForm::new(&original);
+        assert!(
+            form.update(SettingsMessage::RequestClose, &original)
+                .is_none()
+        );
+        assert_eq!(form.close, CloseState::Ready);
+        let mut form = SettingsForm::new(&original);
+        form.update(SettingsMessage::IntervalMinutes("6".into()), &original);
+        form.update(SettingsMessage::IntervalMinutes("5".into()), &original);
+        form.update(SettingsMessage::RequestClose, &original);
+        assert_eq!(form.close, CloseState::Ready);
+        assert!(form.pending_save.is_none());
+    }
+
+    #[test]
+    fn close_warning_blocks_auto_save_and_keep_editing_preserves_the_draft() {
+        let original = Settings::default();
+        let mut form = SettingsForm::new(&original);
+        form.update(SettingsMessage::IntervalMinutes("6".into()), &original);
+        assert!(form.can_auto_save());
+        assert!(
+            form.update(SettingsMessage::RequestClose, &original)
+                .is_none()
+        );
+        assert_eq!(form.close, CloseState::Confirm);
+        assert!(!form.can_auto_save());
+        assert!(form.pending_save.is_none());
+        form.update(SettingsMessage::KeepEditing, &original);
+        assert_eq!(form.close, CloseState::Open);
+        assert!(form.can_auto_save());
+        assert_eq!(form.interval, TimeInput::new(360));
+    }
+
+    #[test]
+    fn discard_closes_without_submitting_even_an_invalid_draft() {
+        let original = Settings::default();
+        let mut form = SettingsForm::new(&original);
+        form.update(SettingsMessage::TextSize("invalid".into()), &original);
+        form.update(SettingsMessage::RequestClose, &original);
+        assert_eq!(form.close, CloseState::Confirm);
+        assert!(form.update(SettingsMessage::Discard, &original).is_none());
+        assert_eq!(form.close, CloseState::Ready);
+        assert!(form.pending_save.is_none());
+    }
+
+    #[test]
+    fn save_and_close_waits_for_acknowledgment_and_recovers_from_failure() {
+        let original = Settings::default();
+        let mut form = SettingsForm::new(&original);
+        form.update(SettingsMessage::IntervalMinutes("6".into()), &original);
+        form.update(SettingsMessage::RequestClose, &original);
+        let saved = form
+            .update(SettingsMessage::SaveAndClose, &original)
+            .unwrap();
+        assert_eq!(form.close, CloseState::Saving);
+        assert!(!form.can_auto_save());
+        assert!(
+            form.update(SettingsMessage::SaveAndClose, &original)
+                .is_none()
+        );
+        assert!(!form.sync(&original, None));
+        assert_eq!(form.close, CloseState::Saving);
+        assert!(!form.sync(&original, Some("Cannot save settings")));
+        assert_eq!(form.close, CloseState::Confirm);
+        assert!(form.dirty);
+        assert_eq!(form.interval, TimeInput::new(360));
+        assert_eq!(
+            form.update(SettingsMessage::SaveAndClose, &original),
+            Some(saved.clone())
+        );
+        assert!(form.sync(&saved, None));
+        assert_eq!(form.close, CloseState::Ready);
+        assert!(!form.dirty);
+    }
+
+    #[test]
+    fn invalid_save_and_close_keeps_the_warning_and_draft() {
+        let original = Settings::default();
+        let mut form = SettingsForm::new(&original);
+        form.update(SettingsMessage::TextSize("invalid".into()), &original);
+        form.update(SettingsMessage::RequestClose, &original);
+        assert!(
+            form.update(SettingsMessage::SaveAndClose, &original)
+                .is_none()
+        );
+        assert_eq!(form.close, CloseState::Confirm);
+        assert!(form.pending_save.is_none());
+        assert_eq!(form.text_size, "invalid");
+        assert_eq!(form.error.as_deref(), Some("Text size needs an integer."));
+    }
+
+    #[test]
+    fn keep_editing_cancels_a_pending_close_but_not_an_explicit_save() {
+        let original = Settings::default();
+        let mut form = SettingsForm::new(&original);
+        form.update(SettingsMessage::IntervalMinutes("6".into()), &original);
+        form.update(SettingsMessage::RequestClose, &original);
+        let saved = form
+            .update(SettingsMessage::SaveAndClose, &original)
+            .unwrap();
+        form.update(SettingsMessage::KeepEditing, &original);
+        assert_eq!(form.close, CloseState::Open);
+        assert!(form.sync(&saved, None));
+        assert_eq!(form.close, CloseState::Open);
+        assert!(!form.dirty);
+    }
+
+    #[test]
+    fn edits_after_save_and_close_require_another_confirmation() {
+        let original = Settings::default();
+        let mut form = SettingsForm::new(&original);
+        form.update(SettingsMessage::IntervalMinutes("6".into()), &original);
+        form.update(SettingsMessage::RequestClose, &original);
+        let saved = form
+            .update(SettingsMessage::SaveAndClose, &original)
+            .unwrap();
+        form.update(SettingsMessage::IntervalSeconds("1".into()), &original);
+        assert!(form.sync(&saved, None));
+        assert_eq!(form.close, CloseState::Confirm);
+        assert!(form.dirty);
+        assert_eq!(form.interval, TimeInput::new(361));
+    }
+
+    #[test]
+    fn field_messages_edit_only_the_draft_and_save_through_one_handler() {
+        use crate::{
+            breathing::Pace,
+            config::{ChartStyle, FocusSide, FocusStyle},
+        };
+        type ReadValue = fn(&Settings) -> String;
+        let cases: Vec<(SettingsMessage, ReadValue, &str)> = vec![
+            (
+                SettingsMessage::IntervalMinutes("6".into()),
+                |s| s.interval_secs.to_string(),
+                "360",
+            ),
+            (
+                SettingsMessage::IntervalSeconds("1".into()),
+                |s| s.interval_secs.to_string(),
+                "301",
+            ),
+            (
+                SettingsMessage::Duration("6".into()),
+                |s| s.duration_secs.to_string(),
+                "6",
+            ),
+            (
+                SettingsMessage::TypingMinutes("3".into()),
+                |s| s.typing_limit_secs.to_string(),
+                "180",
+            ),
+            (
+                SettingsMessage::TypingSeconds("1".into()),
+                |s| s.typing_limit_secs.to_string(),
+                "121",
+            ),
+            (
+                SettingsMessage::TextSize("44".into()),
+                |s| s.text_size.to_string(),
+                "44",
+            ),
+            (
+                SettingsMessage::IdleMinutes("3".into()),
+                |s| s.idle_secs.to_string(),
+                "180",
+            ),
+            (
+                SettingsMessage::IdleSeconds("1".into()),
+                |s| s.idle_secs.to_string(),
+                "121",
+            ),
+            (
+                SettingsMessage::ReflectionsEnabled(false),
+                |s| s.reflections_enabled.to_string(),
+                "false",
+            ),
+            (
+                SettingsMessage::ChartStyle(ChartStyle::Treemap),
+                |s| s.charts.style.as_str().into(),
+                "treemap",
+            ),
+            (
+                SettingsMessage::ChartProjects(true),
+                |s| s.charts.projects.to_string(),
+                "true",
+            ),
+            (
+                SettingsMessage::ChartFeelings(true),
+                |s| s.charts.feelings.to_string(),
+                "true",
+            ),
+            (
+                SettingsMessage::ChartTags(true),
+                |s| s.charts.tags.to_string(),
+                "true",
+            ),
+            (
+                SettingsMessage::FocusEnabled(true),
+                |s| s.focus.enabled.to_string(),
+                "true",
+            ),
+            (
+                SettingsMessage::FocusStyle(FocusStyle::Timeline),
+                |s| s.focus.style.as_str().into(),
+                "timeline",
+            ),
+            (
+                SettingsMessage::FocusSide(FocusSide::Left),
+                |s| s.focus.side.as_str().into(),
+                "left",
+            ),
+            (
+                SettingsMessage::Focus24Hour(true),
+                |s| s.focus.use_24_hour_time.to_string(),
+                "true",
+            ),
+            (
+                SettingsMessage::BreathingEnabled(false),
+                |s| s.breathing.enabled.to_string(),
+                "false",
+            ),
+            (
+                SettingsMessage::BreathingReducedMotion(true),
+                |s| s.breathing.reduced_motion.to_string(),
+                "true",
+            ),
+            (
+                SettingsMessage::BreathingPace(Pace::Short),
+                |s| s.breathing.pace.as_str().into(),
+                "short",
+            ),
+            (
+                SettingsMessage::BreathingCycles(2),
+                |s| s.breathing.cycles.to_string(),
+                "2",
+            ),
+        ];
+        let original = Settings::default();
+        for (message, read, expected) in cases {
+            let mut form = SettingsForm::new(&original);
+            assert!(form.update(message, &original).is_none());
+            assert!(form.dirty);
+            assert!(form.pending_save.is_none());
+            let saved = form.update(SettingsMessage::Save, &original).unwrap();
+            assert_eq!(read(&saved), expected);
+            assert_eq!(form.pending_save.as_ref(), Some(&saved));
+        }
+    }
+
+    #[test]
+    fn grouped_updates_preserve_pending_edits_and_failed_save_drafts() {
+        let original = Settings::default();
+        let mut form = SettingsForm::new(&original);
+        form.update(SettingsMessage::IntervalMinutes("6".into()), &original);
+        let saved = form.update(SettingsMessage::Save, &original).unwrap();
+        form.update(SettingsMessage::IntervalSeconds("1".into()), &saved);
+        assert!(form.sync(&saved, None));
+        assert!(form.dirty);
+        assert_eq!(form.interval, TimeInput::new(361));
+        form.update(SettingsMessage::TextSize("invalid".into()), &saved);
+        assert!(form.update(SettingsMessage::Save, &saved).is_none());
+        assert_eq!(form.text_size, "invalid");
+        assert!(form.dirty);
+        assert!(form.pending_save.is_none());
+        assert_eq!(form.error.as_deref(), Some("Text size needs an integer."));
+    }
+
+    #[test]
+    fn breathing_edits_keep_family_order_and_ignore_invalid_counts() {
+        use crate::breathing::Family;
+        let original = Settings::default();
+        let mut form = SettingsForm::new(&original);
+        for cycles in [0, 3, u8::MAX] {
+            assert!(
+                form.update(SettingsMessage::BreathingCycles(cycles), &original)
+                    .is_none()
+            );
+            assert_eq!(form.breathing.cycles, 1);
+            assert!(!form.dirty);
+        }
+        form.update(
+            SettingsMessage::BreathingFamily(Family::Lattice, true),
+            &original,
+        );
+        assert_eq!(form.breathing.families.last(), Some(&Family::Lattice));
+        assert_eq!(form.breathing.families.len(), Family::ALL.len());
+        for family in Family::ALL {
+            form.update(SettingsMessage::BreathingFamily(family, false), &original);
+        }
+        assert!(form.update(SettingsMessage::Save, &original).is_none());
+        assert_eq!(
+            form.error.as_deref(),
+            Some("Choose at least one breathing pattern.")
+        );
+    }
 
     #[test]
     fn navigation_has_seven_direct_pages_and_does_not_touch_the_draft() {
@@ -264,14 +673,17 @@ mod tests {
     fn minutes_and_seconds_preserve_every_supported_second() {
         for seconds in 15..=86_400 {
             let input = TimeInput::new(seconds);
-            assert_eq!(input.parse("Interval", 15, 86_400), Ok(seconds));
+            assert_eq!(input.parse("Interval", limits::INTERVAL_SECS), Ok(seconds));
         }
         for (min, max) in [(30, 600), (30, 3_600)] {
             for seconds in [min, min + 1, 59, 60, 61, max - 1, max] {
-                assert_eq!(TimeInput::new(seconds).parse("Time", min, max), Ok(seconds));
+                assert_eq!(
+                    TimeInput::new(seconds).parse("Time", min..=max),
+                    Ok(seconds)
+                );
             }
-            assert!(TimeInput::new(min - 1).parse("Time", min, max).is_err());
-            assert!(TimeInput::new(max + 1).parse("Time", min, max).is_err());
+            assert!(TimeInput::new(min - 1).parse("Time", min..=max).is_err());
+            assert!(TimeInput::new(max + 1).parse("Time", min..=max).is_err());
         }
     }
 
@@ -290,7 +702,7 @@ mod tests {
                 minutes: minutes.into(),
                 seconds: seconds.into(),
             };
-            assert!(input.parse("Time", 15, 86_400).is_err());
+            assert!(input.parse("Time", limits::INTERVAL_SECS).is_err());
         }
     }
 
@@ -317,16 +729,16 @@ mod tests {
 
     #[test]
     fn numeric_field_error_reports_unsaveable_values_only() {
-        assert!(numeric_field_error("600", 15, 86_400).is_none());
+        assert!(numeric_field_error("600", limits::INTERVAL_SECS).is_none());
         assert_eq!(
-            numeric_field_error("5", 15, 86_400).as_deref(),
+            numeric_field_error("5", limits::INTERVAL_SECS).as_deref(),
             Some("Must be a whole number from 15 to 86400.")
         );
-        assert!(numeric_field_error("86401", 15, 86_400).is_some());
-        assert!(numeric_field_error("", 15, 86_400).is_some());
-        assert!(numeric_field_error("abc", 15, 86_400).is_some());
-        assert!(numeric_field_error("1.5", 15, 86_400).is_some());
-        assert!(numeric_field_error("-1", 15, 86_400).is_some());
+        assert!(numeric_field_error("86401", limits::INTERVAL_SECS).is_some());
+        assert!(numeric_field_error("", limits::INTERVAL_SECS).is_some());
+        assert!(numeric_field_error("abc", limits::INTERVAL_SECS).is_some());
+        assert!(numeric_field_error("1.5", limits::INTERVAL_SECS).is_some());
+        assert!(numeric_field_error("-1", limits::INTERVAL_SECS).is_some());
     }
 
     #[test]

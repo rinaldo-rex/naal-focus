@@ -96,8 +96,10 @@ impl Default for Settings {
     }
 }
 impl Settings {
+    pub const CYCLES: std::ops::RangeInclusive<u8> = 1..=2;
+
     pub fn validate(&self) -> Result<(), String> {
-        if !(1..=2).contains(&self.cycles) {
+        if !Self::CYCLES.contains(&self.cycles) {
             return Err("Choose one or two breaths.".into());
         }
         if self.families.is_empty() || self.families.len() > Family::ALL.len() {

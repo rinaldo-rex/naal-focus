@@ -4,7 +4,10 @@ use cosmic::{
     iced::{self, Size},
 };
 use engine::Status;
-use naal_focus::{applet::Message, breathing, config, engine};
+use naal_focus::{
+    applet::{Message, SettingsMessage},
+    breathing, config, engine,
+};
 
 // Render the production form without starting a supervisor or reading user data.
 #[allow(dead_code)]
@@ -85,8 +88,34 @@ impl cosmic::Application for Capture {
             .map(CaptureMessage::Ignore)
     }
 
+    fn dialog(&self) -> Option<Element<'_, Self::Message>> {
+        settings_view::close_dialog(&self.form, &self.status)
+            .map(|dialog| dialog.map(|message| CaptureMessage::Ignore(Message::Settings(message))))
+    }
+
+    fn on_app_exit(&mut self) -> Option<Self::Message> {
+        Some(CaptureMessage::Ignore(Message::Settings(
+            SettingsMessage::RequestClose,
+        )))
+    }
+
+    fn on_escape(&mut self) -> cosmic::app::Task<Self::Message> {
+        self.form
+            .update(SettingsMessage::KeepEditing, &self.status.settings);
+        cosmic::app::Task::none()
+    }
+
     fn subscription(&self) -> iced::Subscription<Self::Message> {
-        iced::window::open_events().map(CaptureMessage::Opened)
+        iced::Subscription::batch([
+            iced::window::open_events().map(CaptureMessage::Opened),
+            iced::window::events().map(|(id, event)| {
+                CaptureMessage::Ignore(match event {
+                    iced::window::Event::CloseRequested => Message::SettingsCloseRequested(id),
+                    iced::window::Event::Closed => Message::SettingsClosed(id),
+                    _ => Message::WindowFocus { id, focused: true },
+                })
+            }),
+        ])
     }
 
     fn update(&mut self, message: Self::Message) -> cosmic::app::Task<Self::Message> {
@@ -102,6 +131,9 @@ impl cosmic::Application for Capture {
                     "focus",
                     "appearance",
                     "quotes",
+                    "unsaved",
+                    "unsaved-invalid",
+                    "unsaved-saving",
                 ];
                 let path = self
                     .output
@@ -117,14 +149,51 @@ impl cosmic::Application for Capture {
                 if self.step == names.len() {
                     return iced::exit();
                 }
-                self.navigation.model.activate_position(self.step as u16);
+                if self.step < 7 {
+                    self.navigation.model.activate_position(self.step as u16);
+                } else if self.step == 7 {
+                    self.navigation.model.activate_position(0);
+                    self.form.update(
+                        SettingsMessage::IntervalMinutes("6".into()),
+                        &self.status.settings,
+                    );
+                    self.form
+                        .update(SettingsMessage::RequestClose, &self.status.settings);
+                } else if self.step == 8 {
+                    self.form.update(
+                        SettingsMessage::TextSize("invalid".into()),
+                        &self.status.settings,
+                    );
+                } else {
+                    self.form.update(
+                        SettingsMessage::TextSize("36".into()),
+                        &self.status.settings,
+                    );
+                    self.form
+                        .update(SettingsMessage::SaveAndClose, &self.status.settings);
+                }
                 if let Some(id) = self.core.main_window_id() {
                     return screenshot(id);
                 }
             }
-            CaptureMessage::Ignore(message) => {
-                let _ = message;
+            CaptureMessage::Ignore(Message::Settings(message)) => {
+                if let Some(settings) = self.form.update(message, &self.status.settings) {
+                    // Demo acknowledgment only: never write user preferences.
+                    self.status.settings = settings;
+                    self.form.sync(&self.status.settings, None);
+                }
+                if self.form.close == settings::CloseState::Ready {
+                    return iced::exit();
+                }
             }
+            CaptureMessage::Ignore(Message::SettingsPage(id)) => self.navigation.select(id),
+            CaptureMessage::Ignore(Message::SettingsCloseRequested(_)) => {
+                return self.update(CaptureMessage::Ignore(Message::Settings(
+                    SettingsMessage::RequestClose,
+                )));
+            }
+            CaptureMessage::Ignore(Message::SettingsClosed(_)) => return iced::exit(),
+            CaptureMessage::Ignore(_) => {}
         }
         cosmic::app::Task::none()
     }
@@ -143,7 +212,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         cosmic::app::Settings::default()
             .size(Size::new(width, height))
             .theme(cosmic::Theme::dark())
-            .exit_on_close(true),
+            .exit_on_close(false),
         output,
     )?;
     Ok(())

@@ -1,9 +1,9 @@
 //! One supervisor-owned tracker. No screenshots, input hooks, or subprocess polling.
 use super::{Clock, Day, Snapshot, Window, store};
 use crate::{
-    activity_log,
+    private_fs,
     process::{Singleton, boot_time, desktop_connection},
-    recall::system_ms,
+    time::system_ms,
 };
 use cosmic_protocols::toplevel_info::v1::client::{
     zcosmic_toplevel_handle_v1 as handle, zcosmic_toplevel_info_v1 as info,
@@ -139,7 +139,7 @@ fn run(control: &Mutex<Control>, shared: &Mutex<Shared>, stop: &AtomicBool) -> R
             Err(_) => return Ok(()),
         }
     };
-    let directory: PathBuf = activity_log::directory()?;
+    let directory: PathBuf = private_fs::directory()?;
     let loaded = loop {
         match store::load_today_in(&directory, system_ms()) {
             Ok(day) => break day,

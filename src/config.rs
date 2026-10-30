@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     fs::{self, OpenOptions},
     io::Write,
+    ops::RangeInclusive,
     os::unix::fs::OpenOptionsExt,
     path::{Path, PathBuf},
 };
@@ -10,6 +11,17 @@ pub const APP_ID: &str = "io.github.rinaldo_rex.NaalFocus";
 pub const DEFAULT_QUOTES: &str = include_str!("../data/quotes.txt");
 // Covers the worst-case UTF-8 size of 100 × 500-character valid quotes.
 pub const MAX_CONFIG_BYTES: u64 = 256 * 1024;
+pub const DEFAULT_TEXT_SIZE: u32 = 36;
+
+pub mod limits {
+    use std::ops::RangeInclusive;
+
+    pub const INTERVAL_SECS: RangeInclusive<u64> = 15..=86_400;
+    pub const DURATION_SECS: RangeInclusive<u64> = 1..=30;
+    pub const TYPING_LIMIT_SECS: RangeInclusive<u64> = 30..=600;
+    pub const TEXT_SIZE: RangeInclusive<u64> = 22..=72;
+    pub const IDLE_SECS: RangeInclusive<u64> = 30..=3_600;
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -123,7 +135,7 @@ impl Default for Settings {
             // Keep reflection writing available for new and existing preferences.
             reflections_enabled: true,
             typing_limit_secs: 120,
-            text_size: 36,
+            text_size: DEFAULT_TEXT_SIZE,
             idle_secs: 120,
             charts: ChartSettings::default(),
             focus: FocusSettings::default(),
@@ -163,26 +175,55 @@ impl Settings {
         if self.version != 1 {
             return Err("Unsupported settings version; your file has not been overwritten.".into());
         }
-        if !(15..=86400).contains(&self.interval_secs) {
-            return Err("Interval must be 15–86400 seconds.".into());
-        }
-        if !(1..=30).contains(&self.duration_secs) {
-            return Err("Duration must be 1–30 seconds.".into());
-        }
-        if !(30..=600).contains(&self.typing_limit_secs) {
-            return Err("Typing time limit must be 30–600 seconds.".into());
-        }
+        validate_range(
+            self.interval_secs,
+            limits::INTERVAL_SECS,
+            "Interval",
+            "seconds",
+        )?;
+        validate_range(
+            self.duration_secs,
+            limits::DURATION_SECS,
+            "Duration",
+            "seconds",
+        )?;
+        validate_range(
+            self.typing_limit_secs,
+            limits::TYPING_LIMIT_SECS,
+            "Typing time limit",
+            "seconds",
+        )?;
         if self.interval_secs <= self.duration_secs {
             return Err("Interval must exceed the visible duration.".into());
         }
-        if !(22..=72).contains(&self.text_size) {
-            return Err("Text size must be 22–72 logical pixels.".into());
-        }
-        if !(30..=3600).contains(&self.idle_secs) {
-            return Err("Idle threshold must be 30–3600 seconds.".into());
-        }
+        validate_range(
+            u64::from(self.text_size),
+            limits::TEXT_SIZE,
+            "Text size",
+            "logical pixels",
+        )?;
+        validate_range(
+            u64::from(self.idle_secs),
+            limits::IDLE_SECS,
+            "Idle threshold",
+            "seconds",
+        )?;
         self.breathing.validate()?;
         validate_quotes(&self.quotes)
+    }
+}
+
+fn validate_range(
+    value: u64,
+    range: RangeInclusive<u64>,
+    label: &str,
+    unit: &str,
+) -> Result<(), String> {
+    if range.contains(&value) {
+        Ok(())
+    } else {
+        let (min, max) = range.into_inner();
+        Err(format!("{label} must be {min}–{max} {unit}."))
     }
 }
 
@@ -332,6 +373,52 @@ pub fn save(path: &Path, settings: &Settings) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shared_numeric_limits_preserve_boundaries_and_error_messages() {
+        type SetValue = fn(&mut Settings, u64);
+        let cases: [(SetValue, RangeInclusive<u64>, &str); 5] = [
+            (
+                |s, v| s.interval_secs = v,
+                limits::INTERVAL_SECS,
+                "Interval must be 15–86400 seconds.",
+            ),
+            (
+                |s, v| s.duration_secs = v,
+                limits::DURATION_SECS,
+                "Duration must be 1–30 seconds.",
+            ),
+            (
+                |s, v| s.typing_limit_secs = v,
+                limits::TYPING_LIMIT_SECS,
+                "Typing time limit must be 30–600 seconds.",
+            ),
+            (
+                |s, v| s.text_size = v as u32,
+                limits::TEXT_SIZE,
+                "Text size must be 22–72 logical pixels.",
+            ),
+            (
+                |s, v| s.idle_secs = v as u32,
+                limits::IDLE_SECS,
+                "Idle threshold must be 30–3600 seconds.",
+            ),
+        ];
+        for (set, range, error) in cases {
+            let mut settings = Settings {
+                interval_secs: 86_400,
+                ..Settings::default()
+            };
+            for value in [*range.start(), *range.end()] {
+                set(&mut settings, value);
+                settings.validate().unwrap();
+            }
+            for value in [range.start() - 1, range.end() + 1] {
+                set(&mut settings, value);
+                assert_eq!(settings.validate().unwrap_err(), error);
+            }
+        }
+    }
 
     #[test]
     fn defaults_are_opt_in_and_valid() {

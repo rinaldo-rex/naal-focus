@@ -2,7 +2,12 @@
 //! entries plus a private writer and a detached browser launch. All
 //! statistics derive only from documented history fields (text, timestamp);
 //! untrusted text is embedded as escaped JSON, never as HTML or script.
-use crate::activity_log::{self, Entry};
+use crate::{
+    activity_log::{self, Entry},
+    pending::Pending,
+    private_fs,
+    time::{Local, to_local, unix_millis},
+};
 use serde::Serialize;
 use std::{
     collections::{BTreeMap, BTreeSet, HashSet},
@@ -11,8 +16,6 @@ use std::{
     os::unix::fs::{MetadataExt, PermissionsExt},
     path::{Path, PathBuf},
     process::{Command, Stdio},
-    sync::mpsc::{self, Receiver, TryRecvError},
-    time::{SystemTime, UNIX_EPOCH},
 };
 
 const TEMPLATE: &str = include_str!("dashboard_page.html");
@@ -33,51 +36,6 @@ const MONTHS: [&str; 12] = [
     "November",
     "December",
 ];
-
-/// Local calendar date and time, used for day bucketing and display.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Local {
-    pub year: i32,
-    pub month: u32,
-    pub day: u32,
-    pub hour: u32,
-    pub minute: u32,
-    pub second: u32,
-}
-
-/// Time-zone conversion through the C library, honoring the session zone.
-pub fn to_local(unix_ms: u64) -> Local {
-    let secs = (unix_ms / 1000).min(i64::MAX as u64) as libc::time_t;
-    // SAFETY: tm is a live writable struct; localtime_r only writes through
-    // the given pointer and is thread-safe, as is the gmtime_r fallback.
-    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
-    if unsafe { libc::localtime_r(&secs, &mut tm) }.is_null() {
-        // SAFETY: g is a live writable struct; gmtime_r writes only to it.
-        let mut g: libc::tm = unsafe { std::mem::zeroed() };
-        if unsafe { libc::gmtime_r(&secs, &mut g) }.is_null() {
-            return Local {
-                year: 1970,
-                month: 1,
-                day: 1,
-                hour: 0,
-                minute: 0,
-                second: 0,
-            };
-        }
-        return from_tm(g);
-    }
-    from_tm(tm)
-}
-fn from_tm(tm: libc::tm) -> Local {
-    Local {
-        year: tm.tm_year.saturating_add(1900),
-        month: tm.tm_mon.max(0) as u32 + 1,
-        day: tm.tm_mday.max(1) as u32,
-        hour: tm.tm_hour.max(0) as u32,
-        minute: tm.tm_min.max(0) as u32,
-        second: tm.tm_sec.max(0) as u32,
-    }
-}
 
 /// Days since 1970-01-01 from a civil date (Howard Hinnant's public-domain
 /// algorithms). Pure date arithmetic: no time zones, no wall clock.
@@ -102,9 +60,6 @@ fn civil_from_days(z: i64) -> (i32, u32, u32) {
     let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
     (if m <= 2 { y + 1 } else { y } as i32, m, d)
 }
-fn date_key(l: &Local) -> String {
-    format!("{:04}-{:02}-{:02}", l.year, l.month, l.day)
-}
 fn key_days(key: &str) -> i64 {
     let mut parts = key.split('-');
     let y: i32 = parts.next().unwrap_or("0").parse().unwrap_or(0);
@@ -127,12 +82,6 @@ fn clock_12(hour: u32, minute: u32) -> String {
         minute,
         if hour < 12 { "AM" } else { "PM" }
     )
-}
-
-/// Explicit #word vocabulary: alphanumeric plus `_`/`-`, case-insensitive,
-/// duplicate-free per entry. Trailing `-`/`_` is punctuation, stripped.
-pub fn parse_tags(text: &str) -> Vec<String> {
-    crate::metadata::Metadata::parse(text).tags
 }
 
 #[derive(Serialize)]
@@ -202,7 +151,7 @@ pub fn generate(
 ) -> String {
     let now = to_local(now_ms);
     let today_days = days_from_civil(now.year, now.month, now.day);
-    let today_key = date_key(&now);
+    let today_key = now.date_key();
 
     let mut outs: Vec<EntryOut> = entries
         .iter()
@@ -211,7 +160,7 @@ pub fn generate(
             let metadata = e.metadata();
             EntryOut {
                 ms: e.timestamp_unix_ms,
-                date: date_key(&l),
+                date: l.date_key(),
                 minutes: l.hour * 60 + l.minute,
                 text: e.text.clone(),
                 tags: metadata.tags,
@@ -358,7 +307,7 @@ pub fn generate_error(reason: &str, now_ms: u64, to_local: impl Fn(u64) -> Local
         v: 1,
         generated_ms: now_ms,
         generated_local: GeneratedLocal {
-            date: date_key(&now),
+            date: now.date_key(),
             date_long: format!(
                 "{} {}, {}",
                 MONTHS[now.month as usize - 1],
@@ -368,7 +317,7 @@ pub fn generate_error(reason: &str, now_ms: u64, to_local: impl Fn(u64) -> Local
             time: clock_12(now.hour, now.minute),
             minutes: now.hour * 60 + now.minute,
         },
-        today: date_key(&now),
+        today: now.date_key(),
         empty: true,
         skipped: 0,
         error: Some(reason.to_owned()),
@@ -391,17 +340,12 @@ pub fn generate_error(reason: &str, now_ms: u64, to_local: impl Fn(u64) -> Local
 
 /// Generation entry points using the real clock and session time zone.
 pub fn generate_system(entries: &[Entry], skipped: usize) -> String {
-    let now_ms = system_ms();
+    let now_ms = unix_millis().unwrap_or_default() as u64;
     generate(entries, skipped, now_ms, to_local)
 }
 pub fn generate_error_system(reason: &str) -> String {
-    generate_error(reason, system_ms(), to_local)
-}
-fn system_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
+    let now_ms = unix_millis().unwrap_or_default() as u64;
+    generate_error(reason, now_ms, to_local)
 }
 
 fn render(payload: &Payload) -> String {
@@ -424,19 +368,18 @@ fn escape_for_script(json: &str) -> String {
 /// current user, mode 0600, refusing symlinks, hardlinks, and foreign owners
 /// exactly like `activity.jsonl`. Replaces any earlier generation in place.
 fn write_private(directory: &Path, html: &str) -> Result<(), String> {
-    let dir = activity_log::private_dir(directory)?;
-    activity_log::lock(&dir)?;
-    let file = activity_log::open_at(&dir, c"dashboard.html", libc::O_WRONLY | libc::O_CREAT)
+    let dir = private_fs::private_dir(directory)?;
+    let dir = private_fs::lock(dir)?;
+    let file = private_fs::open_at(&dir, c"dashboard.html", libc::O_WRONLY | libc::O_CREAT)
         .map_err(|e| format!("Dashboard output is unwritable: {e}"))?;
-    activity_log::check_owner(&file)?;
+    private_fs::check_owner(&file)?;
     let metadata = file.metadata().map_err(|e| e.to_string())?;
     if !metadata.is_file() || metadata.nlink() != 1 {
         return Err("Dashboard output must be a regular, unlinked-to-other-files file.".into());
     }
     file.set_permissions(Permissions::from_mode(0o600))
         .map_err(|e| e.to_string())?;
-    activity_log::lock(&file)?;
-    let mut file = file;
+    let mut file = private_fs::lock(file)?;
     file.set_len(0).map_err(|e| e.to_string())?;
     file.write_all(html.as_bytes()).map_err(|e| e.to_string())?;
     file.sync_all().map_err(|e| e.to_string())?;
@@ -453,40 +396,26 @@ pub fn dashboard_path(directory: &Path) -> PathBuf {
 /// browser. Blocking work stays on this worker; the applet only polls, so a
 /// stalled filesystem cannot freeze its controls.
 pub struct PendingOpen {
-    result: Receiver<Result<(), String>>,
-    done: bool,
+    result: Pending<()>,
 }
 impl PendingOpen {
     pub fn start() -> Result<Self, String> {
-        let (tx, rx) = mpsc::sync_channel(1);
-        std::thread::Builder::new()
-            .name("dashboard-open".into())
-            .spawn(move || {
-                let _ = tx.send(open_and_launch());
-            })
+        Self::start_with(open_and_launch)
+    }
+    fn start_with(
+        open: impl FnOnce() -> Result<(), String> + Send + 'static,
+    ) -> Result<Self, String> {
+        let result = Pending::start("dashboard-open", open)
             .map_err(|_| "Cannot start the dashboard worker; try again.".to_string())?;
-        Ok(Self {
-            result: rx,
-            done: false,
-        })
+        Ok(Self { result })
     }
     pub fn poll(&mut self) -> Option<Result<(), String>> {
-        if self.done {
-            return None;
-        }
-        let result = match self.result.try_recv() {
-            Ok(result) => result,
-            Err(TryRecvError::Empty) => return None,
-            Err(TryRecvError::Disconnected) => {
-                Err("Dashboard worker stopped; try opening it again.".into())
-            }
-        };
-        self.done = true;
-        Some(result)
+        self.result
+            .poll_once("Dashboard worker stopped; try opening it again.")
     }
 }
 fn open_and_launch() -> Result<(), String> {
-    let directory = activity_log::directory()?;
+    let directory = private_fs::directory()?;
     let html = match activity_log::load_lenient(&directory) {
         Ok((entries, skipped)) => generate_system(&entries, skipped),
         // An unreadable history still opens a restrained error page rather
@@ -514,7 +443,14 @@ fn browser_command(path: &Path) -> Command {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pending::tests::wait;
     use std::{fs, os::unix::fs::PermissionsExt, path::PathBuf};
+
+    /// Explicit #word vocabulary: alphanumeric plus `_`/`-`, case-insensitive,
+    /// duplicate-free per entry. Trailing `-`/`_` is punctuation, stripped.
+    fn parse_tags(text: &str) -> Vec<String> {
+        crate::metadata::Metadata::parse(text).tags
+    }
 
     struct Temp(PathBuf);
     impl Temp {
@@ -776,6 +712,29 @@ mod tests {
         std::os::unix::fs::symlink(&dir, &alias).unwrap();
         assert!(write_private(&alias, "<!doctype html>x").is_err());
         assert_eq!(fs::read(&target).unwrap(), b"untouched");
+    }
+
+    #[test]
+    fn dashboard_worker_results_and_panics_are_reported_once_without_a_browser() {
+        for result in [Ok(()), Err("Fixture dashboard failure.".into())] {
+            let expected = result.clone();
+            let mut pending = PendingOpen::start_with(move || {
+                assert_eq!(std::thread::current().name(), Some("dashboard-open"));
+                result
+            })
+            .unwrap();
+            assert_eq!(wait(|| pending.poll()), expected);
+            assert!(pending.poll().is_none());
+        }
+        let mut stopped = PendingOpen::start_with(|| {
+            panic!("simulated dashboard worker panic");
+        })
+        .unwrap();
+        assert_eq!(
+            wait(|| stopped.poll()),
+            Err("Dashboard worker stopped; try opening it again.".into())
+        );
+        assert!(stopped.poll().is_none());
     }
 
     #[test]

@@ -21,7 +21,7 @@ mod settings;
 mod settings_view;
 pub use launch::run_settings;
 use launch::settings_command;
-use settings::{Navigation, SettingsForm};
+use settings::{CloseState, Navigation, SettingsForm};
 
 #[derive(Clone, Copy, Default)]
 pub struct Flags {
@@ -60,6 +60,8 @@ pub enum Message {
     SettingsToken(Option<String>),
     SettingsLaunched(Result<(), String>),
     SettingsOpened(Id),
+    SettingsCloseRequested(Id),
+    SettingsClosed(Id),
     PopupClosed(Id),
     Tick,
     Enabled(bool),
@@ -67,6 +69,13 @@ pub enum Message {
     Snooze,
     Resume,
     SettingsPage(widget::nav_bar::Id),
+    Settings(SettingsMessage),
+    WindowFocus { id: Id, focused: bool },
+    Surface(cosmic::surface::Action<Message>),
+}
+
+#[derive(Debug, Clone)]
+pub enum SettingsMessage {
     IntervalMinutes(String),
     IntervalSeconds(String),
     Duration(String),
@@ -76,23 +85,25 @@ pub enum Message {
     TextSize(String),
     IdleMinutes(String),
     IdleSeconds(String),
-    ChartStyle(usize),
+    ChartStyle(ChartStyle),
     ChartProjects(bool),
     ChartFeelings(bool),
     ChartTags(bool),
     FocusEnabled(bool),
-    FocusStyle(usize),
-    FocusSide(usize),
+    FocusStyle(FocusStyle),
+    FocusSide(FocusSide),
     Focus24Hour(bool),
     BreathingEnabled(bool),
     BreathingReducedMotion(bool),
-    BreathingPace(usize),
-    BreathingCycles(usize),
+    BreathingPace(crate::breathing::Pace),
+    BreathingCycles(u8),
     BreathingFamily(crate::breathing::Family, bool),
     Quotes(widget::text_editor::Action),
     Save,
-    WindowFocus { id: Id, focused: bool },
-    Surface(cosmic::surface::Action<Message>),
+    RequestClose,
+    SaveAndClose,
+    Discard,
+    KeepEditing,
 }
 
 impl App {
@@ -200,8 +211,28 @@ impl cosmic::Application for App {
         };
         (app, task)
     }
+    fn on_app_exit(&mut self) -> Option<Message> {
+        self.standalone
+            .then_some(Message::Settings(SettingsMessage::RequestClose))
+    }
+    fn dialog(&self) -> Option<Element<'_, Message>> {
+        if self.standalone {
+            settings_view::close_dialog(&self.form, &self.status)
+                .map(|dialog| dialog.map(Message::Settings))
+        } else {
+            None
+        }
+    }
+    fn on_escape(&mut self) -> Task<cosmic::Action<Message>> {
+        if self.standalone && matches!(self.form.close, CloseState::Confirm | CloseState::Saving) {
+            return self.update(Message::Settings(SettingsMessage::KeepEditing));
+        }
+        Task::none()
+    }
     fn on_close_requested(&self, id: Id) -> Option<Message> {
-        if self.popup == Some(id) {
+        if self.standalone && self.core.main_window_id() == Some(id) {
+            Some(Message::SettingsClosed(id))
+        } else if self.popup == Some(id) {
             Some(Message::PopupClosed(id))
         } else {
             None
@@ -272,6 +303,9 @@ impl cosmic::Application for App {
                     self.saved_at = None;
                 }
                 self.sync_status(self.engine.status());
+                if self.standalone && self.form.close == CloseState::Ready {
+                    return iced::exit();
+                }
                 // Generation and opening run on the dashboard worker; this
                 // loop only polls its result without ever blocking on I/O.
                 if let Some(result) = self.pending_dashboard.as_mut().and_then(|p| p.poll()) {
@@ -367,6 +401,16 @@ impl cosmic::Application for App {
                     return activation::activate(id, token);
                 }
             }
+            Message::SettingsCloseRequested(id) => {
+                if self.standalone && self.core.main_window_id() == Some(id) {
+                    return self.update(Message::Settings(SettingsMessage::RequestClose));
+                }
+            }
+            Message::SettingsClosed(id) => {
+                if self.standalone && self.core.main_window_id() == Some(id) {
+                    return iced::exit();
+                }
+            }
             Message::WindowFocus { id, focused } => {
                 // Leaving the settings window is the commit point for drafting:
                 // an entirely valid draft saves itself here; an invalid draft
@@ -374,10 +418,9 @@ impl cosmic::Application for App {
                 if self.standalone
                     && !focused
                     && self.core.main_window_id() == Some(id)
-                    && self.form.dirty
-                    && let Ok(settings) = self.form.save(&self.status.settings)
+                    && self.form.can_auto_save()
                 {
-                    self.engine.request(Request::Settings(settings));
+                    return self.update(Message::Settings(SettingsMessage::Save));
                 }
             }
             Message::Enabled(enabled) => {
@@ -408,116 +451,12 @@ impl cosmic::Application for App {
                     },
                 );
             }
-            Message::IntervalMinutes(text) => {
-                self.form.interval.minutes = text;
-                self.form.dirty = true;
-            }
-            Message::IntervalSeconds(text) => {
-                self.form.interval.seconds = text;
-                self.form.dirty = true;
-            }
-            Message::Duration(text) => {
-                self.form.duration = text;
-                self.form.dirty = true;
-            }
-            Message::ReflectionsEnabled(enabled) => {
-                self.form.reflections_enabled = enabled;
-                self.form.dirty = true;
-            }
-            Message::TypingMinutes(text) => {
-                self.form.typing_limit.minutes = text;
-                self.form.dirty = true;
-            }
-            Message::TypingSeconds(text) => {
-                self.form.typing_limit.seconds = text;
-                self.form.dirty = true;
-            }
-            Message::TextSize(text) => {
-                self.form.text_size = text;
-                self.form.dirty = true;
-            }
-            Message::IdleMinutes(text) => {
-                self.form.idle_secs.minutes = text;
-                self.form.dirty = true;
-            }
-            Message::IdleSeconds(text) => {
-                self.form.idle_secs.seconds = text;
-                self.form.dirty = true;
-            }
-            Message::ChartStyle(index) => {
-                if let Some(style) = [ChartStyle::Heatmap, ChartStyle::Treemap].get(index) {
-                    self.form.charts.style = *style;
-                    self.form.dirty = true;
-                }
-            }
-            Message::ChartProjects(enabled) => {
-                self.form.charts.projects = enabled;
-                self.form.dirty = true;
-            }
-            Message::ChartFeelings(enabled) => {
-                self.form.charts.feelings = enabled;
-                self.form.dirty = true;
-            }
-            Message::ChartTags(enabled) => {
-                self.form.charts.tags = enabled;
-                self.form.dirty = true;
-            }
-            Message::FocusEnabled(enabled) => {
-                self.form.focus.enabled = enabled;
-                self.form.dirty = true;
-            }
-            Message::FocusStyle(index) => {
-                if let Some(style) =
-                    [FocusStyle::Totals, FocusStyle::Timeline, FocusStyle::Both].get(index)
-                {
-                    self.form.focus.style = *style;
-                    self.form.dirty = true;
-                }
-            }
-            Message::FocusSide(index) => {
-                if let Some(side) = [FocusSide::Left, FocusSide::Right].get(index) {
-                    self.form.focus.side = *side;
-                    self.form.dirty = true;
-                }
-            }
-            Message::Focus24Hour(enabled) => {
-                self.form.focus.use_24_hour_time = enabled;
-                self.form.dirty = true;
-            }
-            Message::BreathingEnabled(enabled) => {
-                self.form.breathing.enabled = enabled;
-                self.form.dirty = true;
-            }
-            Message::BreathingReducedMotion(enabled) => {
-                self.form.breathing.reduced_motion = enabled;
-                self.form.dirty = true;
-            }
-            Message::BreathingPace(index) => {
-                if let Some(pace) = crate::breathing::Pace::ALL.get(index) {
-                    self.form.breathing.pace = *pace;
-                    self.form.dirty = true;
-                }
-            }
-            Message::BreathingCycles(index) => {
-                if index < 2 {
-                    self.form.breathing.cycles = index as u8 + 1;
-                    self.form.dirty = true;
-                }
-            }
-            Message::BreathingFamily(family, enabled) => {
-                self.form.breathing.families.retain(|f| *f != family);
-                if enabled {
-                    self.form.breathing.families.push(family);
-                }
-                self.form.dirty = true;
-            }
-            Message::Quotes(action) => {
-                self.form.dirty |= action.is_edit();
-                self.form.quotes.perform(action);
-            }
-            Message::Save => {
-                if let Ok(settings) = self.form.save(&self.status.settings) {
+            Message::Settings(message) => {
+                if let Some(settings) = self.form.update(message, &self.status.settings) {
                     self.engine.request(Request::Settings(settings));
+                }
+                if self.standalone && self.form.close == CloseState::Ready {
+                    return iced::exit();
                 }
             }
             Message::TogglePopup => {
@@ -561,10 +500,14 @@ impl cosmic::Application for App {
 }
 
 fn settings_window_message((id, event): (Id, iced::window::Event)) -> Message {
-    Message::WindowFocus {
-        id,
+    match event {
+        iced::window::Event::CloseRequested => Message::SettingsCloseRequested(id),
+        iced::window::Event::Closed => Message::SettingsClosed(id),
         // Only a real focus loss commits a draft, not resizing or moving it.
-        focused: !matches!(event, iced::window::Event::Unfocused),
+        _ => Message::WindowFocus {
+            id,
+            focused: !matches!(event, iced::window::Event::Unfocused),
+        },
     }
 }
 
@@ -589,6 +532,19 @@ fn resume_request(status: &Status) -> Option<Request> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn compositor_close_requests_are_handled_before_window_teardown() {
+        let id = Id::unique();
+        assert!(matches!(
+            settings_window_message((id, iced::window::Event::CloseRequested)),
+            Message::SettingsCloseRequested(window) if window == id
+        ));
+        assert!(matches!(
+            settings_window_message((id, iced::window::Event::Closed)),
+            Message::SettingsClosed(window) if window == id
+        ));
+    }
+
     #[test]
     fn only_real_focus_loss_can_trigger_an_implicit_save() {
         let id = Id::unique();
