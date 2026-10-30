@@ -394,6 +394,13 @@ impl Delegate {
     }
 }
 
+fn invalidate_tree(view: &NSView) {
+    view.setNeedsDisplay(true);
+    for child in view.subviews() {
+        invalidate_tree(&child);
+    }
+}
+
 fn preview(output: Option<&Path>) -> Result<(), Box<dyn std::error::Error>> {
     let mtm = MainThreadMarker::new().ok_or("AppKit requires the main thread.")?;
     let _app = NSApplication::sharedApplication(mtm);
@@ -419,10 +426,17 @@ fn preview(output: Option<&Path>) -> Result<(), Box<dyn std::error::Error>> {
                 .window
                 .contentView()
                 .ok_or("Settings view unavailable.")?;
+            invalidate_tree(&view);
             let bitmap = view
                 .bitmapImageRepForCachingDisplayInRect(view.bounds())
                 .ok_or("Settings capture unavailable.")?;
             view.cacheDisplayInRect_toBitmapImageRep(view.bounds(), &bitmap);
+            if bitmap
+                .colorAtX_y(10, 10)
+                .is_none_or(|color| color.alphaComponent() < 0.99)
+            {
+                return Err("Settings capture has a missing background.".into());
+            }
             // SAFETY: an empty properties dictionary is valid for PNG encoding.
             let data = unsafe {
                 bitmap.representationUsingType_properties(

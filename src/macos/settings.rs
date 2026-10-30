@@ -3,9 +3,30 @@ use crate::{
     breathing::{Family, Pace},
     config::{self, Settings},
 };
-use objc2::{MainThreadMarker, MainThreadOnly, rc::Retained, runtime::ProtocolObject, sel};
+use objc2::{
+    MainThreadMarker, MainThreadOnly, define_class, msg_send, rc::Retained,
+    runtime::ProtocolObject, sel,
+};
 use objc2_app_kit::*;
-use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
+use objc2_foundation::{NSObjectProtocol, NSPoint, NSRect, NSSize, NSString};
+
+define_class!(
+    // SAFETY: NSView has no additional subclassing requirements; drawing is main-thread-only.
+    #[unsafe(super = NSView)]
+    #[thread_kind = MainThreadOnly]
+    struct NaalSettingsBackground;
+    unsafe impl NSObjectProtocol for NaalSettingsBackground {}
+    impl NaalSettingsBackground {
+        #[unsafe(method(isOpaque))]
+        fn opaque(&self) -> bool { true }
+        #[unsafe(method(drawRect:))]
+        fn draw(&self, _rect: NSRect) {
+            // Hidden-view captures do not include NSWindow’s separate background.
+            NSColor::windowBackgroundColor().setFill();
+            NSRectFill(self.bounds());
+        }
+    }
+);
 
 pub(super) struct SettingsWindow {
     pub window: Retained<NSWindow>,
@@ -118,7 +139,11 @@ impl SettingsWindow {
         }
         window.setTitle(&NSString::from_str("Naal Focus Settings"));
         window.setDelegate(Some(ProtocolObject::from_ref(target)));
-        let root = window.contentView().expect("settings content view");
+        let allocated = NaalSettingsBackground::alloc(mtm).set_ivars(());
+        // SAFETY: this initializes the subclass’s NSView superclass with a valid frame.
+        let root: Retained<NaalSettingsBackground> =
+            unsafe { msg_send![super(allocated), initWithFrame: rect(0.0, 0.0, 900.0, 660.0)] };
+        window.setContentView(Some(&root));
         let sidebar = NSView::initWithFrame(NSView::alloc(mtm), rect(0.0, 64.0, 200.0, 596.0));
         sidebar.setAutoresizingMask(NSAutoresizingMaskOptions::ViewHeightSizable);
         root.addSubview(&sidebar);
