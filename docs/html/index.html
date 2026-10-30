@@ -116,13 +116,14 @@
       <a href="#settings"><span>04</span> Settings</a>
       <a href="#dashboard"><span>05</span> Dashboard</a>
       <a href="#privacy"><span>06</span> Privacy &amp; boundaries</a>
+      <a href="#macos"><span>07</span> macOS prototype</a>
     </nav>
   </aside>
   <main id="main">
     <header>
       <p class="eyebrow">Canonical product &amp; UI reference</p>
       <h1>What Naal Focus does</h1>
-      <p class="intro">A COSMIC desktop applet that periodically dims every monitor so you can breathe, notice your attention, and optionally write a private reflection.</p>
+      <p class="intro">A desktop reminder that periodically dims every monitor so you can breathe and notice your attention. The COSMIC version below also offers private reflections. An experimental Mac version is described at the end.</p>
       <p class="defaults">Starts paused. Default timing: every 5 minutes → 14-second breathing entrance → 5-second reflection.</p>
     </header>
 
@@ -275,6 +276,18 @@
           <p>No screenshots or raw keystroke history are recorded. Foreground-window time is not a measure of productivity.</p>
         </div>
       </div>
+    </section>
+
+    <section id="macos" aria-labelledby="macos-title">
+      <div class="section-title"><span class="number">07</span><h2 id="macos-title">macOS prototype</h2></div>
+      <p>Experimental, for Apple Silicon Macs running macOS 14 or later. Real-monitor, keyboard-focus, and lock/sleep behavior still need live testing.</p>
+      <dl class="stack">
+        <dt>Available in the prototype</dt><dd>Menu-bar controls, one shared timer, quotes across connected monitors, all seven breathing patterns, and native settings. Reminders start paused; Show now keeps the 2-second delay.</dd>
+        <dt>Coming soon</dt><dd>Reflections, reflection charts, window history, and the dashboard. Their placeholders do not collect or save history.</dd>
+        <dt>Settings</dt><dd>Change reminder timing, idle threshold, breathing, quote size, and quotes. Choose Save to apply; closing with changes asks whether to save or discard. Closing Settings leaves the menu-bar app running.</dd>
+        <dt>Local preferences</dt><dd><code>~/Library/Application Support/Naal Focus/settings.json</code>. No login item is added.</dd>
+      </dl>
+      <p class="brief">The screenshots above show the COSMIC version, not the Mac prototype. See <a href="../TESTING.md">testing</a> before trying reminders on a Mac.</p>
     </section>
 
     <footer>

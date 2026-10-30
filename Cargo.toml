@@ -8,7 +8,7 @@ publish = false
 
 [features]
 default = []
-applet = ["dep:libcosmic"]
+applet = ["dep:libcosmic", "dep:objc2", "dep:objc2-app-kit", "dep:objc2-foundation", "dep:objc2-core-graphics"]
 
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
@@ -30,6 +30,12 @@ rev = "6af8b7051b6e6c3a9d0c42c3b2fc5a14a80afe36"
 default-features = false
 features = ["applet-token", "tokio", "a11y", "single-instance", "process"]
 optional = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = { version = "=0.6.4", optional = true }
+objc2-foundation = { version = "=0.3.2", optional = true }
+objc2-core-graphics = { version = "=0.3.2", optional = true, default-features = false, features = ["std", "CGSession", "CGEventSource", "CGEventTypes"] }
+objc2-app-kit = { version = "=0.3.2", optional = true, default-features = false, features = ["std", "objc2-core-foundation", "NSApplication", "NSRunningApplication", "NSResponder", "NSWindow", "NSView", "NSMenu", "NSMenuItem", "NSStatusBar", "NSStatusItem", "NSStatusBarButton", "NSButton", "NSButtonCell", "NSControl", "NSCell", "NSTextField", "NSText", "NSTextView", "NSTextContainer", "NSScrollView", "NSClipView", "NSAlert", "NSGraphics", "NSGraphicsContext", "NSBitmapImageRep", "NSImageRep", "NSColor", "NSFont", "NSFontDescriptor", "NSParagraphStyle", "NSWorkspace", "NSScreen", "NSEvent", "NSPopUpButton", "NSImage"] }
 
 [[bin]]
 name = "naal-focus"

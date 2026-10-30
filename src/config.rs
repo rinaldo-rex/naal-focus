@@ -7,7 +7,11 @@ use std::{
     path::{Path, PathBuf},
 };
 
-pub const APP_ID: &str = "io.github.rinaldo_rex.NaalFocus";
+pub const APP_ID: &str = if cfg!(target_os = "macos") {
+    "io.github.rinaldo-rex.NaalFocus"
+} else {
+    "io.github.rinaldo_rex.NaalFocus"
+};
 pub const DEFAULT_QUOTES: &str = include_str!("../data/quotes.txt");
 // Covers the worst-case UTF-8 size of 100 × 500-character valid quotes.
 pub const MAX_CONFIG_BYTES: u64 = 256 * 1024;
@@ -316,6 +320,16 @@ pub(crate) fn validate_quotes(quotes: &[String]) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(target_os = "macos")]
+pub fn config_path() -> Result<PathBuf, String> {
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .map(|home| home.join("Library/Application Support/Naal Focus/settings.json"))
+        .ok_or_else(|| "An absolute HOME is required to load settings.".into())
+}
+
+#[cfg(not(target_os = "macos"))]
 pub fn config_path() -> Result<PathBuf, String> {
     let base = std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)

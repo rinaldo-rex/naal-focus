@@ -9,6 +9,14 @@ The [app guide](html/index.html) describes app behavior. These constraints expla
 - **Private storage.** Preserve ownership/link checks and stable directory locks when changing history files. Corrections and focus snapshots use atomic replacement. Helper payloads use stdin; window titles must stay out of arguments, shared status, and logs.
 - **No silent opt-ins.** Updates preserve preferences and keep older reflection records readable. Missing settings must not enable recurring reminders or window tracking.
 
+## macOS prototype
+
+The native AppKit shell shares the Rust scheduler, configuration rules, and software renderer. Linux-only dependencies and integrations stay behind target boundaries. Reflections and tracking are not wired into the Mac UI.
+
+A background supervisor owns at most one separate reminder process. Settings transfers and heartbeats use nonblocking pipes; storage and session sampling run on separate workers. The helper has an independent startup/heartbeat/lifetime watchdog. Parent exit, stale safety, loss of focus, display changes, and workspace sleep/session notifications end reminders. Readiness requires activation, a key window, and visible windows on every selected display; no global input tap or physical display capture is used.
+
+Lock sampling uses the macOS session dictionary’s undocumented lock-field convention. Missing console/login observations and malformed values fail closed, but absence of the lock field means unlocked under that convention. This is an experimental boundary, not a verified lock-state guarantee. Real Mac acceptance remains mandatory.
+
 ## Known limits
 
 - Fullscreen and Do Not Disturb do not suppress reminders.

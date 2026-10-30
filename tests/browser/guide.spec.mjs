@@ -55,7 +55,7 @@ test("guide images load at their documented dimensions with useful alt text", as
 test("guide fits desktop widths and section links remain usable", async ({ page }, info) => {
   await page.goto(guide);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-  for (const label of ["Applet", "Reminder", "Reflection & context", "Settings", "Dashboard", "Privacy & boundaries"]) {
+  for (const label of ["Applet", "Reminder", "Reflection & context", "Settings", "Dashboard", "Privacy & boundaries", "macOS prototype"]) {
     const link = page.getByRole("navigation").getByRole("link", { name: label, exact: false });
     const hash = await link.getAttribute("href");
     await link.click();

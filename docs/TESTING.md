@@ -46,6 +46,14 @@ Breathing and composed-reminder previews write offscreen PPM images. The overlay
 
 The overlay/dashboard recipes fix the time zone to UTC and use a fixed date; set `TZ=UTC0` when running their Cargo examples directly. Desktop fonts can affect rendered pixels. Review captures before replacing guide images; keep their documented dimensions in sync.
 
+## macOS prototype checks
+
+On macOS 14+ with Apple Silicon, `cargo test --locked --features applet` also checks native settings round-tripping, rejected unsupervised launches, and recovery from a stalled helper startup. These tests never show reminders. `naal-focus --smoke-test` creates hidden controls using default demo preferences; it reads no personal history and saves nothing.
+
+From Linux, `cargo clippy --locked --target aarch64-apple-darwin --features applet --all-targets -- -D warnings` type-checks the Mac code after installing that Rust target. It cannot link or run AppKit and is not evidence of runtime correctness.
+
+The Mac settings preview uses `naal-focus --preview-settings /absolute/output` without showing a window or taking focus. Review those real native captures before adding Mac screenshots to the app guide; existing guide images remain COSMIC-only.
+
 ## Manual checks
 
 **Only with explicit consent:** save other work, use a disposable editor document, and isolate settings and history in temporary directories. Pause recurring reminders first to avoid collisions.
