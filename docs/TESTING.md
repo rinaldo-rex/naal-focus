@@ -52,9 +52,21 @@ On macOS 14+ with Apple Silicon, `cargo test --locked --features applet` also ch
 
 From Linux, `cargo clippy --locked --target aarch64-apple-darwin --features applet --all-targets -- -D warnings` type-checks the Mac code after installing that Rust target. It cannot link or run AppKit and is not evidence of runtime correctness.
 
-The Mac settings preview uses `naal-focus --preview-settings /absolute/output` without showing a window or taking focus. Review those real native captures before adding Mac screenshots to the app guide; existing guide images remain COSMIC-only.
+Native settings checks cover 800×600, 1000×660, and 1400×900 windows. The Mac settings preview uses `naal-focus --preview-settings /absolute/output` without showing a window or taking focus. Review those real native captures before adding Mac screenshots to the app guide; existing guide images remain COSMIC-only.
 
-## Manual checks
+The `.github/workflows/macos.yml` workflow runs on an Apple Silicon macOS 14 runner when this feature branch is pushed or a pull request targets main. It checks Rust 1.93 formatting/lints, core tests, hidden native settings, and startup watchdog recovery, then packages an ad-hoc-signed app. No overlay is opened. The downloadable artifact contains the app ZIP and real native settings captures, retained for seven days. Private-repository jobs consume the account’s Actions allowance; no signing secrets or notarization are configured.
+
+### Live Mac acceptance
+
+With the tester’s explicit consent, save other work and keep recurring reminders paused first. Use a disposable editor document and record the revision, Mac/macOS version, monitor arrangement, resolutions, and scales.
+
+- Confirm startup is paused, the menu-bar controls work, and supported settings save without changing Coming soon sections. Closing Settings must leave the app running; invalid or unsaved edits must not disappear silently.
+- Use Show now to check the delay, synchronized breathing/quotes across all monitors, Escape, normal timeout, keyboard focus, and focus return. Verify no typing reaches the underlying editor.
+- Check Retina/scaled displays, full-screen apps and Spaces, display hotplug, and switching apps. Losing focus or changing displays should end the reminder safely.
+- Check idle, lock/unlock, display sleep, and system sleep/wake before enabling recurrence. There must be no reminder over a locked screen and no catch-up burst after waking. Lock detection uses an undocumented macOS convention and needs particular scrutiny.
+- Verify quitting the parent removes any reminder. A passing hosted-runner test does not replace these live checks. Reflection and window-history tests are outside this prototype’s scope.
+
+## Manual checks (COSMIC)
 
 **Only with explicit consent:** save other work, use a disposable editor document, and isolate settings and history in temporary directories. Pause recurring reminders first to avoid collisions.
 

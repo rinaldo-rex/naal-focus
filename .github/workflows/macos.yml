@@ -1,0 +1,52 @@
+name: macOS prototype
+
+on:
+  push:
+    branches: [feat/macos-support]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  apple-silicon:
+    runs-on: macos-14
+    timeout-minutes: 20
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "14.0"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Install Rust
+        run: |
+          rustup toolchain install 1.93.0 --profile minimal --component clippy,rustfmt
+          rustup default 1.93.0
+      - name: Confirm Apple Silicon runner
+        run: test "$(uname -m)" = arm64
+      - name: Formatting and lint
+        run: |
+          cargo fmt --check
+          cargo clippy --locked --features applet --all-targets -- -D warnings
+          bash -n scripts/*.sh
+      - name: Core, native settings, and watchdog tests (no reminders)
+        run: cargo test --locked --features applet
+      - name: Capture demo settings (no reminders)
+        run: ./target/debug/naal-focus --preview-settings "$PWD/target/macos-previews"
+      - name: Package experimental app
+        run: |
+          cargo build --locked --release --features applet --bin naal-focus
+          ./scripts/macos.sh bundle "$PWD/target/macos"
+          /usr/bin/unzip -t target/macos/Naal-Focus-macOS.zip
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: naal-focus-macos-apple-silicon
+          path: |
+            target/macos/Naal-Focus-macOS.zip
+            target/macos-previews/
+          if-no-files-found: error
+          retention-days: 7
