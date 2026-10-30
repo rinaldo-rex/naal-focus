@@ -276,8 +276,18 @@ mod tests {
         let temp = Temp::new();
         let path = temp.0.join("original");
         let dir = private_dir(&path).unwrap();
-        fs::write(path.join("saved"), b"original").unwrap();
-        fs::write(path.join(OsString::from_vec(vec![0xff])), b"non-UTF-8").unwrap();
+        let mut expected = vec![c"saved".to_owned(), c"second".to_owned()];
+        // APFS rejects invalid UTF-8 filenames; Linux also exercises raw-byte names.
+        #[cfg(target_os = "linux")]
+        expected.push(CString::new(vec![0xff]).unwrap());
+        for name in &expected {
+            fs::write(
+                path.join(OsString::from_vec(name.as_bytes().to_vec())),
+                b"original",
+            )
+            .unwrap();
+        }
+        expected.sort();
         fs::rename(&path, temp.0.join("moved")).unwrap();
         fs::create_dir(&path).unwrap();
         fs::write(path.join("replacement"), b"not original").unwrap();
@@ -287,13 +297,7 @@ mod tests {
                 .collect::<Result<Vec<_>, _>>()
                 .unwrap();
             names.sort();
-            assert_eq!(
-                names,
-                vec![
-                    CString::new("saved").unwrap(),
-                    CString::new(vec![0xff]).unwrap()
-                ]
-            );
+            assert_eq!(names, expected);
         }
         let file = File::open(path.join("replacement")).unwrap();
         assert!(entries(&file).is_err());
