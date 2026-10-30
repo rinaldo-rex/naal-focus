@@ -35,7 +35,7 @@ just install        # ~/Applications/Naal Focus.app; does not launch it
 
 Quit the app before updating. Test builds are ad-hoc signed, not notarized; macOS may block opening a downloaded copy. Approve it through macOS only if you trust the build. No Apple account, login item, or tracking permission is needed for this prototype.
 
-The [Mac workflow](.github/workflows/macos.yml) builds and tests on Apple Silicon and provides the test app plus demo settings captures as a downloadable artifact. It has not run until this branch is pushed; CI is not live safety acceptance.
+The [Mac workflow](.github/workflows/macos.yml) builds and tests on Apple Silicon and provides the test app plus demo settings captures as a downloadable artifact. CI verifies builds and automated checks, not live reminder safety.
 
 ## Uninstall
 

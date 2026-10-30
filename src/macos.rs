@@ -421,6 +421,9 @@ fn preview(output: Option<&Path>) -> Result<(), Box<dyn std::error::Error>> {
             ("reflections-coming-soon", 2),
             ("quotes", 6),
         ] {
+            // Hidden windows can reuse incomplete subview caches between pages.
+            let form = SettingsWindow::new(mtm, &delegate, &settings);
+            form.window.setContentSize(NSSize::new(1000.0, 660.0));
             form.page(index);
             let view = form
                 .window
